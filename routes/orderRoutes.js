@@ -7,6 +7,7 @@ const { requireAuth } = require('../utils/jwtAuth');
 const { auditAdminAction } = require('../utils/audit');
 
 router.post('/', requireAuth, requireVerifiedUser, orderController.createOrder);
+router.get('/', requireAuth, requireVerifiedUser, orderController.listMyOrders);
 router.get('/:id', requireAuth, requireVerifiedUser, orderController.getOrderById);
 router.patch(
   '/:id/status',

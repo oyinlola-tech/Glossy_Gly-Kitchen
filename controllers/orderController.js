@@ -1,7 +1,57 @@
 const db = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
 const { isTransitionAllowed } = require('../utils/statusTransitions');
-const { isUuid } = require('../utils/validation');
+const { isUuid, toInt } = require('../utils/validation');
+
+// -------------------- GET /orders (List current user's orders) --------------------
+exports.listMyOrders = async (req, res) => {
+  const userId = req.user.id;
+  const page = Math.max(toInt(req.query.page) || 1, 1);
+  const limit = Math.min(Math.max(toInt(req.query.limit) || 20, 1), 100);
+  const offset = (page - 1) * limit;
+  const status = req.query.status ? String(req.query.status) : null;
+
+  if (!userId || !isUuid(userId)) {
+    return res.status(400).json({ error: 'Valid userId is required' });
+  }
+
+  const where = ['user_id = ?'];
+  const values = [userId];
+  if (status) {
+    where.push('status = ?');
+    values.push(status);
+  }
+
+  const whereClause = `WHERE ${where.join(' AND ')}`;
+
+  try {
+    const [countRows] = await db.query(
+      `SELECT COUNT(*) AS total
+       FROM orders
+       ${whereClause}`,
+      values
+    );
+
+    const [orders] = await db.query(
+      `SELECT id, user_id, total_amount, status, created_at, updated_at
+       FROM orders
+       ${whereClause}
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...values, limit, offset]
+    );
+
+    res.json({
+      page,
+      limit,
+      total: countRows[0].total,
+      orders,
+    });
+  } catch (err) {
+    console.error('List orders error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
 
 // -------------------- POST /orders (Create order from cart) --------------------
 exports.createOrder = async (req, res) => {

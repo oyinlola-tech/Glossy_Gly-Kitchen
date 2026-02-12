@@ -130,3 +130,27 @@ exports.deleteFood = async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 };
+
+// -------------------- GET /foods/:id --------------------
+exports.getFoodById = async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(id)) {
+    return res.status(400).json({ error: 'Invalid food id' });
+  }
+
+  try {
+    const [foods] = await db.query(
+      'SELECT * FROM food_items WHERE id = ? AND available = 1',
+      [id]
+    );
+
+    if (foods.length === 0) {
+      return res.status(404).json({ error: 'Food item not found' });
+    }
+
+    return res.json(foods[0]);
+  } catch (err) {
+    console.error('Get food by id error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};

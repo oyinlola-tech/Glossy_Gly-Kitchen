@@ -30,7 +30,22 @@ const cors = () => {
   const allowedOrigins = buildCorsOrigins();
   return (req, res, next) => {
     const origin = req.headers.origin;
-    if (!origin || allowedOrigins.length === 0) {
+    if (!origin) {
+      return next();
+    }
+
+    if (allowedOrigins.length === 0) {
+      // Development/default mode: allow requesting origin.
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Authorization, X-Admin-Key, X-Admin-Bootstrap-Key, X-User-Id, X-Device-Id'
+      );
+      if (req.method === 'OPTIONS') {
+        return res.status(204).end();
+      }
       return next();
     }
 

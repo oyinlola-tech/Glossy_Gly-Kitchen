@@ -515,6 +515,29 @@ const options = {
         },
       },
       '/foods/{id}': {
+        get: {
+          tags: ['Foods'],
+          summary: 'Get a food item by id',
+          parameters: [
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              schema: { type: 'string', format: 'uuid' },
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'OK',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/FoodItem' },
+                },
+              },
+            },
+            '404': { description: 'Not found' },
+          },
+        },
         put: {
           tags: ['Foods'],
           summary: 'Update food item (Admin)',
@@ -635,6 +658,35 @@ const options = {
         },
       },
       '/orders': {
+        get: {
+          tags: ['Orders'],
+          summary: "List current user's orders",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: 'status',
+              in: 'query',
+              required: false,
+              schema: { type: 'string' },
+            },
+            {
+              name: 'page',
+              in: 'query',
+              required: false,
+              schema: { type: 'integer', minimum: 1 },
+            },
+            {
+              name: 'limit',
+              in: 'query',
+              required: false,
+              schema: { type: 'integer', minimum: 1, maximum: 100 },
+            },
+          ],
+          responses: {
+            '200': { description: 'OK' },
+            '401': { description: 'Unauthorized' },
+          },
+        },
         post: {
           tags: ['Orders'],
           summary: 'Create order from cart',

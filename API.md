@@ -252,6 +252,29 @@ List available food items.
 
 ---
 
+### GET `/foods/:id`
+Get a single available food item by ID.
+
+**URL Params**
+- `id` (UUID)
+
+**Success (200)**
+```json
+{
+  "id": "6f9edc8f-39c0-4d35-92ae-8c7ee6900b72",
+  "name": "Jollof Rice",
+  "price": "12.99",
+  "description": "Classic Nigerian jollof rice with fried plantains",
+  "category": "Main",
+  "available": 1
+}
+```
+
+**Errors**
+- `404` Food item not found
+
+---
+
 ### POST `/foods` (Admin)
 Create a food item.
 
@@ -411,6 +434,35 @@ Clear entire cart.
 ## Orders Endpoints
 
 > Requires `Authorization: Bearer <accessToken>`
+
+### GET `/orders`
+List current user's orders with optional pagination/filtering.
+
+**Query Params (optional)**
+- `status` (e.g. `pending`)
+- `page` (default `1`)
+- `limit` (default `20`, max `100`)
+
+**Success (200)**
+```json
+{
+  "page": 1,
+  "limit": 20,
+  "total": 3,
+  "orders": [
+    {
+      "id": "5f163fbe-8e1b-4b06-a5f0-7d86a74e2a9e",
+      "user_id": "3f0f53e2-7b4a-4c56-8b39-8a3cc24b28a1",
+      "total_amount": "25.98",
+      "status": "pending",
+      "created_at": "2026-02-12T10:00:00.000Z",
+      "updated_at": "2026-02-12T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+---
 
 ### POST `/orders`
 Create order from cart (transactional, validates availability).
