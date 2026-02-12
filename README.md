@@ -10,6 +10,9 @@ Glossy_Gly-Kitchen is a production-ready Node.js + Express backend for a food or
 - Food menu management (admin protected)
 - Cart management with upsert and totals
 - Order creation and lifecycle management with strict transitions
+- Beautiful payment receipt emails (success + failed/declined) via Nodemailer
+- Saved-card support with reusable Paystack authorization tokens
+- Auto-debit endpoint for paying orders with saved cards
 - Dedicated admin system (JWT auth, user management, disputes, dashboard metrics)
 - Request logging and admin audit logs
 - Health and readiness endpoints
@@ -108,6 +111,11 @@ Then apply the payments migration:
 mysql -u root -p glossy_gly_kitchen < migrations/2026-02-12-payments.sql
 ```
 
+Then apply the saved-cards migration:
+```bash
+mysql -u root -p glossy_gly_kitchen < migrations/2026-02-12-saved-cards.sql
+```
+
 5. Start the server:
 
 ```bash
@@ -186,6 +194,10 @@ Major new admin endpoints are now available under `/admin`:
 ## Payments API
 Paystack payment endpoints are available under `/payments`:
 - `POST /payments/initialize`
+- `POST /payments/cards` (save reusable card from successful payment reference)
+- `GET /payments/cards`
+- `DELETE /payments/cards/:cardId`
+- `POST /payments/pay-with-saved-card`
 - `GET /payments/verify/:reference`
 - `POST /payments/webhook/paystack` (public webhook endpoint)
 

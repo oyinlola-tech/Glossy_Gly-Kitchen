@@ -608,6 +608,7 @@ Initialize Paystack transaction for an order.
 | --- | --- | --- | --- |
 | `orderId` | string (UUID) | Yes | `5f163fbe-8e1b-4b06-a5f0-7d86a74e2a9e` |
 | `callbackUrl` | string (URL) | No | `https://your-frontend.app/payments/callback` |
+| `saveCard` | boolean | No | `true` |
 
 **Success (201)**
 ```json
@@ -616,7 +617,105 @@ Initialize Paystack transaction for an order.
   "orderId": "5f163fbe-8e1b-4b06-a5f0-7d86a74e2a9e",
   "reference": "PSK-5f163fbe-1700000000000",
   "authorizationUrl": "https://checkout.paystack.com/...",
-  "accessCode": "ACCESS_xxx"
+  "accessCode": "ACCESS_xxx",
+  "saveCard": true
+}
+```
+
+---
+
+### POST `/payments/cards`
+Save a reusable card from a successful payment reference.
+
+**Headers**
+- `Content-Type: application/json`
+- `Authorization: Bearer <accessToken>`
+
+**Body**
+| Field | Type | Required | Example |
+| --- | --- | --- | --- |
+| `reference` | string | Yes | `PSK-5f163fbe-1700000000000` |
+
+**Success (201)**
+```json
+{
+  "message": "Card saved successfully",
+  "card": {
+    "id": "2b9e9c45-9f30-4b1a-8c84-39d641de72ad",
+    "provider": "paystack",
+    "last4": "4242",
+    "exp_month": "09",
+    "exp_year": "2030",
+    "card_type": "visa",
+    "bank": "GTBank",
+    "account_name": "John Doe",
+    "is_default": 1
+  }
+}
+```
+
+---
+
+### GET `/payments/cards`
+List saved cards for the authenticated user.
+
+**Headers**
+- `Authorization: Bearer <accessToken>`
+
+**Success (200)**
+```json
+{
+  "cards": [
+    {
+      "id": "2b9e9c45-9f30-4b1a-8c84-39d641de72ad",
+      "provider": "paystack",
+      "last4": "4242",
+      "exp_month": "09",
+      "exp_year": "2030",
+      "card_type": "visa",
+      "bank": "GTBank",
+      "account_name": "John Doe",
+      "is_default": 1
+    }
+  ]
+}
+```
+
+---
+
+### DELETE `/payments/cards/:cardId`
+Delete a saved card.
+
+**Headers**
+- `Authorization: Bearer <accessToken>`
+
+**Success (200)**
+```json
+{ "message": "Card removed successfully" }
+```
+
+---
+
+### POST `/payments/pay-with-saved-card`
+Automatically debit a saved card for an order.
+
+**Headers**
+- `Content-Type: application/json`
+- `Authorization: Bearer <accessToken>`
+
+**Body**
+| Field | Type | Required | Example |
+| --- | --- | --- | --- |
+| `orderId` | string (UUID) | Yes | `5f163fbe-8e1b-4b06-a5f0-7d86a74e2a9e` |
+| `cardId` | string (UUID) | Yes | `2b9e9c45-9f30-4b1a-8c84-39d641de72ad` |
+
+**Success (201)**
+```json
+{
+  "message": "Payment completed with saved card",
+  "orderId": "5f163fbe-8e1b-4b06-a5f0-7d86a74e2a9e",
+  "reference": "PSK-AUTO-5f163fbe-1700000000000",
+  "status": "success"
 }
 ```
 
@@ -649,6 +748,7 @@ Paystack webhook receiver (public endpoint).
 **Notes**
 - Signature is validated against `PAYSTACK_WEBHOOK_SECRET`.
 - On successful charge event, payment is marked `success` and order is moved from `pending` to `confirmed`.
+- Payment receipts are emailed via Nodemailer for successful and failed/declined attempts.
 
 ---
 

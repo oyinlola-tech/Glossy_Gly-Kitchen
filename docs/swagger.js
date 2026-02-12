@@ -207,6 +207,22 @@ const options = {
             },
           },
         },
+        PaymentCard: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            provider: { type: 'string', example: 'paystack' },
+            last4: { type: 'string', example: '1234' },
+            exp_month: { type: 'string', example: '09' },
+            exp_year: { type: 'string', example: '2030' },
+            card_type: { type: 'string', example: 'visa' },
+            bank: { type: 'string', example: 'GTBank' },
+            account_name: { type: 'string', example: 'John Doe' },
+            is_default: { type: 'integer' },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+          },
+        },
         UpdateOrderStatusRequest: {
           type: 'object',
           required: ['status'],
@@ -846,6 +862,7 @@ const options = {
                   properties: {
                     orderId: { type: 'string', format: 'uuid' },
                     callbackUrl: { type: 'string', format: 'uri' },
+                    saveCard: { type: 'boolean', description: 'Save reusable card token after successful payment' },
                   },
                 },
               },
@@ -855,6 +872,102 @@ const options = {
             '201': { description: 'Initialized' },
             '400': { description: 'Validation error' },
             '404': { description: 'Order not found' },
+          },
+        },
+      },
+      '/payments/cards': {
+        post: {
+          tags: ['Payments'],
+          summary: 'Save a reusable card from a successful payment reference',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['reference'],
+                  properties: {
+                    reference: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '201': { description: 'Card saved' },
+            '400': { description: 'Validation error' },
+            '404': { description: 'Payment not found' },
+          },
+        },
+        get: {
+          tags: ['Payments'],
+          summary: 'List saved cards for authenticated user',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': {
+              description: 'Saved cards',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      cards: {
+                        type: 'array',
+                        items: { $ref: '#/components/schemas/PaymentCard' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/payments/cards/{cardId}': {
+        delete: {
+          tags: ['Payments'],
+          summary: 'Delete a saved card',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: 'cardId',
+              in: 'path',
+              required: true,
+              schema: { type: 'string', format: 'uuid' },
+            },
+          ],
+          responses: {
+            '200': { description: 'Removed' },
+            '404': { description: 'Card not found' },
+          },
+        },
+      },
+      '/payments/pay-with-saved-card': {
+        post: {
+          tags: ['Payments'],
+          summary: 'Auto-debit a saved card for an order',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['orderId', 'cardId'],
+                  properties: {
+                    orderId: { type: 'string', format: 'uuid' },
+                    cardId: { type: 'string', format: 'uuid' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '201': { description: 'Paid with saved card' },
+            '400': { description: 'Validation error' },
+            '402': { description: 'Automatic debit failed' },
+            '404': { description: 'Order/card not found' },
           },
         },
       },
