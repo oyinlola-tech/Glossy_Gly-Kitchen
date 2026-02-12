@@ -15,9 +15,14 @@ Send access tokens in the `Authorization` header:
 Authorization: Bearer <accessToken>
 ```
 
-Admin-only endpoints require an admin key:
+Admin authentication modes:
+- Legacy admin-key endpoints (`/foods` admin actions and `/orders/:id/status`):
 ```
 x-admin-key: <ADMIN_API_KEY>
+```
+- Admin platform endpoints (`/admin/*`) use admin JWT bearer tokens:
+```
+Authorization: Bearer <adminAccessToken>
 ```
 
 ## Response Format
@@ -52,7 +57,8 @@ All responses are JSON.
 ## Common Headers
 - `Content-Type: application/json` (required for POST/PUT/PATCH)
 - `Authorization: Bearer <accessToken>` (protected endpoints)
-- `x-admin-key: <ADMIN_API_KEY>` (admin endpoints)
+- `x-admin-key: <ADMIN_API_KEY>` (legacy admin-key endpoints only)
+- `Authorization: Bearer <adminAccessToken>` (`/admin/*` endpoints)
 - `X-Request-Id` (optional; echo returned by API)
 
 ---

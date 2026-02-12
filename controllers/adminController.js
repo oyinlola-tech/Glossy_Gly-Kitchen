@@ -7,6 +7,7 @@ const { validatePassword, hashPassword, comparePassword } = require('../utils/pa
 const { createRefreshToken, hashToken, adminRefreshExpiryDate } = require('../utils/tokens');
 const { isTransitionAllowed } = require('../utils/statusTransitions');
 const { adminIssuer } = require('../utils/adminJwtAuth');
+const { safeEqual } = require('../utils/adminAuth');
 const generateOtp = require('../utils/generateOtp');
 const { sendMail } = require('../utils/mailer');
 
@@ -92,7 +93,7 @@ exports.bootstrap = async (req, res) => {
   }
 
   const providedKey = req.get('x-admin-bootstrap-key');
-  if (!providedKey || providedKey !== expectedBootstrapKey) {
+  if (!providedKey || !safeEqual(providedKey, expectedBootstrapKey)) {
     return res.status(401).json({ error: 'Unauthorized bootstrap request' });
   }
 

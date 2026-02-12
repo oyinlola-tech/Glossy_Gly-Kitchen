@@ -12,18 +12,16 @@ const toKobo = (amount) => {
 };
 
 const verifyWebhookSignature = (rawBody, signature) => {
-  if (!rawBody || !signature) return false;
+  const webhookSecret = process.env.PAYSTACK_WEBHOOK_SECRET;
+  if (!webhookSecret || !rawBody || !signature) return false;
+  const trimmedSignature = String(signature).trim().toLowerCase();
+  if (!/^[a-f0-9]{128}$/.test(trimmedSignature)) return false;
   const hash = crypto
-    .createHmac('sha512', process.env.PAYSTACK_WEBHOOK_SECRET)
+    .createHmac('sha512', webhookSecret)
     .update(rawBody, 'utf8')
     .digest('hex');
   const expected = Buffer.from(hash, 'hex');
-  let provided;
-  try {
-    provided = Buffer.from(String(signature).trim(), 'hex');
-  } catch {
-    return false;
-  }
+  const provided = Buffer.from(trimmedSignature, 'hex');
   if (expected.length !== provided.length) return false;
   return crypto.timingSafeEqual(expected, provided);
 };

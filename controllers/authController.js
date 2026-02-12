@@ -200,13 +200,16 @@ exports.resendOtp = async (req, res) => {
   }
 
   try {
-    // Find unverified user with this email
+    // Only allow OTP resend for unverified accounts
     const [users] = await db.query(
       'SELECT id, verified FROM users WHERE email = ?',
       [email]
     );
     if (users.length === 0) {
       return res.status(404).json({ error: 'No account found with this email' });
+    }
+    if (users[0].verified) {
+      return res.status(400).json({ error: 'Account is already verified' });
     }
 
     const userId = users[0].id;
