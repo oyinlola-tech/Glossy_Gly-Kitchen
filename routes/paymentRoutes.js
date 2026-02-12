@@ -13,6 +13,10 @@ const paymentLimiter = rateLimit({
 
 router.post('/initialize', paymentLimiter, requireAuth, requireVerifiedUser, paymentController.initialize);
 router.get('/verify/:reference', paymentLimiter, requireAuth, requireVerifiedUser, paymentController.verify);
+router.post('/cards', paymentLimiter, requireAuth, requireVerifiedUser, paymentController.attachCard);
+router.get('/cards', paymentLimiter, requireAuth, requireVerifiedUser, paymentController.listCards);
+router.delete('/cards/:cardId', paymentLimiter, requireAuth, requireVerifiedUser, paymentController.deleteCard);
+router.post('/pay-with-saved-card', paymentLimiter, requireAuth, requireVerifiedUser, paymentController.payWithSavedCard);
 router.post('/webhook/paystack', paymentController.paystackWebhook);
 
 module.exports = router;

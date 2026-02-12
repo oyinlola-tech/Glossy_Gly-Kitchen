@@ -63,8 +63,35 @@ const verifyTransaction = async (reference) => {
   return payload.data;
 };
 
+const chargeAuthorization = async ({ email, amount, authorizationCode, reference, metadata }) => {
+  const response = await fetch(`${getBaseUrl()}/transaction/charge_authorization`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${getSecretKey()}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email,
+      amount: toKobo(amount),
+      authorization_code: authorizationCode,
+      reference,
+      currency: 'NGN',
+      metadata: metadata || undefined,
+    }),
+  });
+
+  const payload = await response.json();
+  if (!response.ok || payload.status !== true) {
+    const message = payload && payload.message ? payload.message : 'Paystack charge authorization failed';
+    throw new Error(message);
+  }
+
+  return payload.data;
+};
+
 module.exports = {
   initializeTransaction,
   verifyTransaction,
+  chargeAuthorization,
   verifyWebhookSignature,
 };

@@ -1,7 +1,6 @@
 const db = require('../config/db');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
 const { v4: uuidv4 } = require('uuid');
 const { isUuid, isValidEmail, toInt } = require('../utils/validation');
 const { validatePassword, hashPassword, comparePassword } = require('../utils/password');
@@ -9,6 +8,7 @@ const { createRefreshToken, hashToken, adminRefreshExpiryDate } = require('../ut
 const { isTransitionAllowed } = require('../utils/statusTransitions');
 const { adminIssuer } = require('../utils/adminJwtAuth');
 const generateOtp = require('../utils/generateOtp');
+const { sendMail } = require('../utils/mailer');
 
 const parsePaging = (req) => {
   const page = Math.max(toInt(req.query.page) || 1, 1);
@@ -17,14 +17,6 @@ const parsePaging = (req) => {
   return { page, limit, offset };
 };
 
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
-
 const getDeviceFingerprint = (req, bodyDeviceId) => {
   const headerDeviceId = req.get('x-device-id');
   const deviceIdentity = headerDeviceId || bodyDeviceId || req.get('user-agent') || 'unknown-device';
@@ -32,8 +24,7 @@ const getDeviceFingerprint = (req, bodyDeviceId) => {
 };
 
 const sendAdminOtpEmail = async (email, otp) => {
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM,
+  await sendMail({
     to: email,
     subject: 'Glossy_Gly-Kitchen - Admin Login OTP Verification',
     html: `

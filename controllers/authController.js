@@ -2,11 +2,11 @@
 const { v4: uuidv4 } = require('uuid');
 const generateOtp = require('../utils/generateOtp');
 const { generateReferralCode, validateReferralCode } = require('../utils/referralHelper');
-const nodemailer = require('nodemailer');
 const { isValidEmail, isValidPhone } = require('../utils/validation');
 const jwt = require('jsonwebtoken');
 const { validatePassword, hashPassword, comparePassword } = require('../utils/password');
 const { createRefreshToken, hashToken, refreshExpiryDate } = require('../utils/tokens');
+const { sendMail } = require('../utils/mailer');
 
 const issueAccessToken = (user) => {
   const secret = process.env.JWT_SECRET;
@@ -48,19 +48,9 @@ const issueTokens = async (user, req) => {
   return { accessToken, refreshToken };
 };
 
-// -------------------- Nodemailer Transporter --------------------
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
-
 // -------------------- Helper: Send OTP Email --------------------
 const sendOtpEmail = async (email, otp) => {
-  const mailOptions = {
-    from: process.env.EMAIL_FROM,
+  await sendMail({
     to: email,
     subject: 'Glossy_Gly-Kitchen - Verify Your Account',
     html: `
@@ -76,9 +66,7 @@ const sendOtpEmail = async (email, otp) => {
         <p>Cheers,<br>Glossy_Gly-Kitchen Team</p>
       </div>
     `,
-  };
-
-  await transporter.sendMail(mailOptions);
+  });
 };
 
 // -------------------- POST /signup --------------------
