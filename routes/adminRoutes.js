@@ -33,6 +33,8 @@ router.post('/disputes', requireAdminAuth, auditAdminAction('admin.disputes.crea
 router.get('/disputes', requireAdminAuth, auditAdminAction('admin.disputes.list'), adminController.listDisputes);
 router.get('/disputes/:id', requireAdminAuth, auditAdminAction('admin.disputes.get'), adminController.getDisputeById);
 router.patch('/disputes/:id', requireAdminAuth, auditAdminAction('admin.disputes.update'), adminController.updateDispute);
+router.post('/disputes/:id/resolve', requireAdminAuth, auditAdminAction('admin.disputes.resolve'), adminController.resolveDispute);
 router.post('/disputes/:id/comments', requireAdminAuth, auditAdminAction('admin.disputes.add_comment'), adminController.addDisputeComment);
+router.get('/audit-logs', requireAdminAuth, auditAdminAction('admin.audit_logs.list'), adminController.listAuditLogs);
 
 module.exports = router;

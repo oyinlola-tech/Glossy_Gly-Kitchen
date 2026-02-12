@@ -84,6 +84,12 @@ DB_NAME=glossy_gly_kitchen
 EMAIL_USER=your_email@gmail.com
 EMAIL_PASS=your_app_password
 EMAIL_FROM="Glossy_Gly-Kitchen <your_email@gmail.com>"
+
+# Paystack
+PAYSTACK_SECRET_KEY=your_paystack_secret_key_here
+PAYSTACK_PUBLIC_KEY=your_paystack_public_key_here
+PAYSTACK_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxxxxxxxxxxxxx
+PAYSTACK_BASE_URL=https://api.paystack.co
 ```
 
 4. Import the database schema:
@@ -95,6 +101,11 @@ mysql -u root -p < schema.sql
 For existing databases, apply the admin-system migration instead of resetting everything:
 ```bash
 mysql -u root -p glossy_gly_kitchen < migrations/2026-02-12-admin-system.sql
+```
+
+Then apply the payments migration:
+```bash
+mysql -u root -p glossy_gly_kitchen < migrations/2026-02-12-payments.sql
 ```
 
 5. Start the server:
@@ -136,6 +147,10 @@ npm run dev
 | `EMAIL_USER` | Gmail address | `your_email@gmail.com` |
 | `EMAIL_PASS` | Gmail App Password | `your_app_password` |
 | `EMAIL_FROM` | Sender name | `Glossy_Gly-Kitchen <your_email@gmail.com>` |
+| `PAYSTACK_SECRET_KEY` | Paystack secret key | `your_paystack_secret_key_here` |
+| `PAYSTACK_PUBLIC_KEY` | Paystack public key | `your_paystack_public_key_here` |
+| `PAYSTACK_WEBHOOK_SECRET` | Paystack webhook signature secret | `whsec_xxx...` |
+| `PAYSTACK_BASE_URL` | Paystack API base URL | `https://api.paystack.co` |
 
 ## Running the App
 - Development:
@@ -167,6 +182,12 @@ Major new admin endpoints are now available under `/admin`:
 - Orders: `/admin/orders`, `/admin/orders/:id`, `/admin/orders/:id/status`
 - Disputes: `/admin/disputes`, `/admin/disputes/:id`, `/admin/disputes/:id/comments`
 - Dashboard: `/admin/dashboard`
+
+## Payments API
+Paystack payment endpoints are available under `/payments`:
+- `POST /payments/initialize`
+- `GET /payments/verify/:reference`
+- `POST /payments/webhook/paystack` (public webhook endpoint)
 
 ## Folder Structure
 ```

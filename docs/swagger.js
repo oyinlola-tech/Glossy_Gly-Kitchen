@@ -18,6 +18,7 @@ const options = {
     tags: [
       { name: 'Auth' },
       { name: 'Admin' },
+      { name: 'Payments' },
       { name: 'Foods' },
       { name: 'Cart' },
       { name: 'Orders' },
@@ -471,6 +472,42 @@ const options = {
           },
         },
       },
+      '/auth/me': {
+        get: {
+          tags: ['Auth'],
+          summary: 'Get current user profile',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': { description: 'OK' },
+            '401': { description: 'Unauthorized' },
+          },
+        },
+        patch: {
+          tags: ['Auth'],
+          summary: 'Update current user profile (phone/password rotation)',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    phone: { type: 'string', nullable: true },
+                    currentPassword: { type: 'string' },
+                    newPassword: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '200': { description: 'Updated' },
+            '400': { description: 'Validation error' },
+            '401': { description: 'Unauthorized' },
+          },
+        },
+      },
       '/foods': {
         get: {
           tags: ['Foods'],
@@ -794,6 +831,62 @@ const options = {
           },
         },
       },
+      '/payments/initialize': {
+        post: {
+          tags: ['Payments'],
+          summary: 'Initialize Paystack payment for an order',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['orderId'],
+                  properties: {
+                    orderId: { type: 'string', format: 'uuid' },
+                    callbackUrl: { type: 'string', format: 'uri' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '201': { description: 'Initialized' },
+            '400': { description: 'Validation error' },
+            '404': { description: 'Order not found' },
+          },
+        },
+      },
+      '/payments/verify/{reference}': {
+        get: {
+          tags: ['Payments'],
+          summary: 'Verify payment by reference and confirm order payment',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: 'reference',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+            },
+          ],
+          responses: {
+            '200': { description: 'Verified' },
+            '404': { description: 'Payment not found' },
+          },
+        },
+      },
+      '/payments/webhook/paystack': {
+        post: {
+          tags: ['Payments'],
+          summary: 'Paystack webhook endpoint (signature verified)',
+          responses: {
+            '200': { description: 'Processed' },
+            '401': { description: 'Invalid signature' },
+          },
+        },
+      },
       '/admin/auth/bootstrap': {
         post: {
           tags: ['Admin'],
@@ -1108,6 +1201,60 @@ const options = {
           },
           responses: {
             '201': { description: 'Created' },
+          },
+        },
+      },
+      '/admin/disputes/{id}/resolve': {
+        post: {
+          tags: ['Admin'],
+          summary: 'Resolve dispute explicitly',
+          security: [{ adminBearerAuth: [] }],
+          parameters: [
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              schema: { type: 'string', format: 'uuid' },
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['resolutionNotes'],
+                  properties: {
+                    resolutionNotes: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '200': { description: 'Resolved' },
+            '400': { description: 'Invalid status or payload' },
+            '404': { description: 'Dispute not found' },
+          },
+        },
+      },
+      '/admin/audit-logs': {
+        get: {
+          tags: ['Admin'],
+          summary: 'List admin audit logs',
+          security: [{ adminBearerAuth: [] }],
+          parameters: [
+            { name: 'action', in: 'query', required: false, schema: { type: 'string' } },
+            { name: 'method', in: 'query', required: false, schema: { type: 'string' } },
+            { name: 'statusCode', in: 'query', required: false, schema: { type: 'integer' } },
+            { name: 'requestId', in: 'query', required: false, schema: { type: 'string' } },
+            { name: 'from', in: 'query', required: false, schema: { type: 'string', format: 'date-time' } },
+            { name: 'to', in: 'query', required: false, schema: { type: 'string', format: 'date-time' } },
+            { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1 } },
+            { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100 } },
+          ],
+          responses: {
+            '200': { description: 'OK' },
           },
         },
       },

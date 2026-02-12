@@ -844,6 +844,141 @@ exports.addDisputeComment = async (req, res) => {
   }
 };
 
+exports.resolveDispute = async (req, res) => {
+  const { id } = req.params;
+  const { resolutionNotes } = req.body;
+
+  if (!isUuid(id)) {
+    return res.status(400).json({ error: 'Invalid dispute id' });
+  }
+  if (!resolutionNotes || typeof resolutionNotes !== 'string' || !resolutionNotes.trim()) {
+    return res.status(400).json({ error: 'resolutionNotes is required' });
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [rows] = await connection.query(
+      'SELECT id, status, assigned_admin_id FROM disputes WHERE id = ? FOR UPDATE',
+      [id]
+    );
+    if (rows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Dispute not found' });
+    }
+
+    const dispute = rows[0];
+    if (!['open', 'investigating'].includes(dispute.status)) {
+      await connection.rollback();
+      return res.status(400).json({ error: `Cannot resolve dispute in '${dispute.status}' status` });
+    }
+
+    await connection.query(
+      `UPDATE disputes
+       SET status = 'resolved',
+           resolution_notes = ?,
+           resolved_at = NOW(),
+           assigned_admin_id = COALESCE(assigned_admin_id, ?),
+           updated_at = NOW()
+       WHERE id = ?`,
+      [resolutionNotes.trim(), req.admin.id, id]
+    );
+
+    await connection.query(
+      `INSERT INTO dispute_comments (id, dispute_id, author_type, author_id, is_internal, comment, created_at)
+       VALUES (?, ?, 'admin', ?, 1, ?, NOW())`,
+      [uuidv4(), id, req.admin.id, `Resolved: ${resolutionNotes.trim()}`]
+    );
+
+    const [updated] = await connection.query('SELECT * FROM disputes WHERE id = ?', [id]);
+    await connection.commit();
+    return res.json({
+      message: 'Dispute resolved successfully',
+      dispute: updated[0],
+    });
+  } catch (err) {
+    await connection.rollback();
+    console.error('Resolve dispute error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
+  }
+};
+
+exports.listAuditLogs = async (req, res) => {
+  const { page, limit, offset } = parsePaging(req);
+  const where = [];
+  const values = [];
+
+  if (req.query.action) {
+    where.push('action = ?');
+    values.push(String(req.query.action));
+  }
+  if (req.query.method) {
+    where.push('method = ?');
+    values.push(String(req.query.method).toUpperCase());
+  }
+  if (req.query.statusCode) {
+    const statusCode = toInt(req.query.statusCode);
+    if (statusCode === null) {
+      return res.status(400).json({ error: 'statusCode must be an integer' });
+    }
+    where.push('status_code = ?');
+    values.push(statusCode);
+  }
+  if (req.query.requestId) {
+    where.push('request_id = ?');
+    values.push(String(req.query.requestId));
+  }
+  if (req.query.from) {
+    const fromDate = new Date(req.query.from);
+    if (Number.isNaN(fromDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid from datetime' });
+    }
+    where.push('created_at >= ?');
+    values.push(fromDate);
+  }
+  if (req.query.to) {
+    const toDate = new Date(req.query.to);
+    if (Number.isNaN(toDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid to datetime' });
+    }
+    where.push('created_at <= ?');
+    values.push(toDate);
+  }
+
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  try {
+    const [countRows] = await db.query(
+      `SELECT COUNT(*) AS total
+       FROM audit_logs
+       ${whereClause}`,
+      values
+    );
+
+    const [rows] = await db.query(
+      `SELECT id, admin_key_hash, action, method, path, status_code, ip_address, user_agent, entity_id, duration_ms, request_id, created_at
+       FROM audit_logs
+       ${whereClause}
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...values, limit, offset]
+    );
+
+    return res.json({
+      page,
+      limit,
+      total: countRows[0].total,
+      logs: rows,
+    });
+  } catch (err) {
+    console.error('List audit logs error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 exports.dashboard = async (req, res) => {
   try {
     const [[usersRow]] = await db.query(

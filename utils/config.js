@@ -68,6 +68,10 @@ const validateConfig = () => {
   requireEnv('DEFAULT_ADMIN_EMAIL');
   requireEnv('DEFAULT_ADMIN_PASSWORD');
   requireEnv('DEFAULT_ADMIN_FULL_NAME');
+  requireEnv('PAYSTACK_SECRET_KEY');
+  requireEnv('PAYSTACK_PUBLIC_KEY');
+  requireEnv('PAYSTACK_WEBHOOK_SECRET');
+  requireEnv('PAYSTACK_BASE_URL');
 
   if (process.env.NODE_ENV === 'production') {
     requireEnv('CORS_ORIGIN');

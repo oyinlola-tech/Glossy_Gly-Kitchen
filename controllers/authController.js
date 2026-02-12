@@ -398,3 +398,133 @@ exports.logout = async (req, res) => {
   }
 };
 
+// -------------------- GET /auth/me --------------------
+exports.me = async (req, res) => {
+  const userId = req.user && req.user.id;
+  if (!userId) {
+    return res.status(401).json({ error: 'Authorization token required' });
+  }
+
+  try {
+    const [users] = await db.query(
+      `SELECT id, email, phone, verified, is_suspended, created_at, updated_at
+       FROM users
+       WHERE id = ?`,
+      [userId]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    return res.json(users[0]);
+  } catch (err) {
+    console.error('Get profile error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// -------------------- PATCH /auth/me --------------------
+exports.updateMe = async (req, res) => {
+  const userId = req.user && req.user.id;
+  const { phone, currentPassword, newPassword } = req.body;
+
+  if (!userId) {
+    return res.status(401).json({ error: 'Authorization token required' });
+  }
+
+  const wantsPhoneUpdate = phone !== undefined;
+  const wantsPasswordUpdate = currentPassword !== undefined || newPassword !== undefined;
+
+  if (!wantsPhoneUpdate && !wantsPasswordUpdate) {
+    return res.status(400).json({ error: 'No profile fields provided for update' });
+  }
+
+  if (wantsPasswordUpdate) {
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'currentPassword and newPassword are required for password change' });
+    }
+    const passwordError = validatePassword(newPassword);
+    if (passwordError) {
+      return res.status(400).json({ error: passwordError });
+    }
+    if (currentPassword === newPassword) {
+      return res.status(400).json({ error: 'New password must be different from current password' });
+    }
+  }
+
+  if (wantsPhoneUpdate && phone !== null && phone !== '' && !isValidPhone(phone)) {
+    return res.status(400).json({ error: 'Invalid phone number' });
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [users] = await connection.query(
+      'SELECT id, email, phone, password_hash FROM users WHERE id = ?',
+      [userId]
+    );
+    if (users.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = users[0];
+    const fields = [];
+    const values = [];
+
+    if (wantsPhoneUpdate) {
+      const normalizedPhone = phone === null || phone === '' ? null : String(phone).trim();
+      if (normalizedPhone) {
+        const [dup] = await connection.query(
+          'SELECT id FROM users WHERE phone = ? AND id <> ?',
+          [normalizedPhone, userId]
+        );
+        if (dup.length > 0) {
+          await connection.rollback();
+          return res.status(409).json({ error: 'Phone number already registered' });
+        }
+      }
+      fields.push('phone = ?');
+      values.push(normalizedPhone);
+    }
+
+    if (wantsPasswordUpdate) {
+      const ok = await comparePassword(currentPassword, user.password_hash || '');
+      if (!ok) {
+        await connection.rollback();
+        return res.status(400).json({ error: 'Current password is incorrect' });
+      }
+
+      const newPasswordHash = await hashPassword(newPassword);
+      fields.push('password_hash = ?');
+      values.push(newPasswordHash);
+    }
+
+    fields.push('updated_at = NOW()');
+    await connection.query(
+      `UPDATE users SET ${fields.join(', ')} WHERE id = ?`,
+      [...values, userId]
+    );
+
+    const [updatedUsers] = await connection.query(
+      `SELECT id, email, phone, verified, is_suspended, created_at, updated_at
+       FROM users WHERE id = ?`,
+      [userId]
+    );
+
+    await connection.commit();
+    return res.json({
+      message: 'Profile updated successfully',
+      user: updatedUsers[0],
+    });
+  } catch (err) {
+    await connection.rollback();
+    console.error('Update profile error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
+  }
+};
+

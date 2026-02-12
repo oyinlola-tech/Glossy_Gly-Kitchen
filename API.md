@@ -231,6 +231,55 @@ Revoke refresh token.
 
 ---
 
+### GET `/auth/me`
+Get the currently authenticated user's profile.
+
+**Headers**
+- `Authorization: Bearer <accessToken>`
+
+**Success (200)**
+```json
+{
+  "id": "uuid",
+  "email": "user@example.com",
+  "phone": "+2348012345678",
+  "verified": true,
+  "is_suspended": 0,
+  "created_at": "2026-02-12T10:00:00.000Z",
+  "updated_at": "2026-02-12T10:05:00.000Z"
+}
+```
+
+---
+
+### PATCH `/auth/me`
+Update current user's profile.
+
+**Headers**
+- `Content-Type: application/json`
+- `Authorization: Bearer <accessToken>`
+
+**Body (at least one)**
+| Field | Type | Notes |
+| --- | --- | --- |
+| `phone` | string or null | Updates/removes phone |
+| `currentPassword` | string | Required for password change |
+| `newPassword` | string | Required for password change |
+
+**Success (200)**
+```json
+{
+  "message": "Profile updated successfully",
+  "user": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "phone": "+2348012345678"
+  }
+}
+```
+
+---
+
 ## Foods Endpoints
 
 ### GET `/foods`
@@ -543,6 +592,66 @@ Cancel a pending order (customer).
 
 ---
 
+## Payments Endpoints
+
+> Requires `Authorization: Bearer <accessToken>` unless stated otherwise.
+
+### POST `/payments/initialize`
+Initialize Paystack transaction for an order.
+
+**Headers**
+- `Content-Type: application/json`
+- `Authorization: Bearer <accessToken>`
+
+**Body**
+| Field | Type | Required | Example |
+| --- | --- | --- | --- |
+| `orderId` | string (UUID) | Yes | `5f163fbe-8e1b-4b06-a5f0-7d86a74e2a9e` |
+| `callbackUrl` | string (URL) | No | `https://your-frontend.app/payments/callback` |
+
+**Success (201)**
+```json
+{
+  "message": "Payment initialized successfully",
+  "orderId": "5f163fbe-8e1b-4b06-a5f0-7d86a74e2a9e",
+  "reference": "PSK-5f163fbe-1700000000000",
+  "authorizationUrl": "https://checkout.paystack.com/...",
+  "accessCode": "ACCESS_xxx"
+}
+```
+
+---
+
+### GET `/payments/verify/:reference`
+Verify transaction status with Paystack and confirm payment internally.
+
+**Headers**
+- `Authorization: Bearer <accessToken>`
+
+**Success (200)**
+```json
+{
+  "message": "Payment verification completed",
+  "reference": "PSK-5f163fbe-1700000000000",
+  "status": "success",
+  "orderId": "5f163fbe-8e1b-4b06-a5f0-7d86a74e2a9e"
+}
+```
+
+---
+
+### POST `/payments/webhook/paystack`
+Paystack webhook receiver (public endpoint).
+
+**Headers**
+- `x-paystack-signature: <hmac_sha512_signature>`
+
+**Notes**
+- Signature is validated against `PAYSTACK_WEBHOOK_SECRET`.
+- On successful charge event, payment is marked `success` and order is moved from `pending` to `confirmed`.
+
+---
+
 ## System Endpoints
 
 ### GET `/health`
@@ -623,6 +732,12 @@ Update dispute fields such as `status`, `priority`, `assignedAdminId`, `resoluti
 
 ### POST `/admin/disputes/:id/comments`
 Add internal/external admin comment to a dispute.
+
+### POST `/admin/disputes/:id/resolve`
+Resolve a dispute explicitly with required resolution notes.
+
+### GET `/admin/audit-logs`
+List admin activity logs for admin UI/audit pages (supports pagination and filters).
 
 ---
 
