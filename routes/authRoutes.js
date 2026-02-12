@@ -27,6 +27,8 @@ const otpIdentityLimiter = rateLimit({
 router.post('/signup', authLimiter, authController.signup);
 router.post('/verify', authLimiter, otpIdentityLimiter, authController.verify);
 router.post('/resend-otp', authLimiter, otpIdentityLimiter, authController.resendOtp); 
+router.post('/google', authLimiter, authController.googleSignIn);
+router.post('/apple', authLimiter, authController.appleSignIn);
 router.post('/login', authLimiter, authController.login);
 router.post('/request-login-otp', authLimiter, otpIdentityLimiter, authController.requestLoginOtp);
 router.post('/login-otp', authLimiter, otpIdentityLimiter, authController.loginOtp);

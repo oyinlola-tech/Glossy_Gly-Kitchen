@@ -13,6 +13,12 @@ Body: `userId`, `otp`
 ### POST `/auth/resend-otp`
 Body: `email`
 
+### POST `/auth/google`
+Body: `idToken`, optional `deviceId`, `referralCode`
+
+### POST `/auth/apple`
+Body: `identityToken`, optional `deviceId`, `referralCode`
+
 ### POST `/auth/login`
 Body: `email`, `password`, optional `deviceId`
 

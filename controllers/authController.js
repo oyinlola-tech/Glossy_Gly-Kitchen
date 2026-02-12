@@ -8,6 +8,7 @@ const { validatePassword, hashPassword, comparePassword } = require('../utils/pa
 const { createRefreshToken, hashToken, refreshExpiryDate } = require('../utils/tokens');
 const { sendMail } = require('../utils/mailer');
 const { isLocked, recordFailure, clearFailures } = require('../utils/otpGuard');
+const { verifyGoogleIdToken, verifyAppleIdentityToken } = require('../utils/socialAuth');
 const {
   buildSignupVerificationEmail,
   buildLoginOtpEmail,
@@ -201,6 +202,158 @@ const createPasswordResetSession = async (connection, userId) => {
   return { token, expiresAt };
 };
 
+const normalizeSocialEmail = (value) => {
+  if (typeof value !== 'string') return null;
+  const email = value.trim().toLowerCase();
+  if (!email || !isValidEmail(email)) return null;
+  return email;
+};
+
+const normalizeEmailVerified = (value) => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return value.toLowerCase() === 'true';
+  return false;
+};
+
+const loadSocialUser = async (connection, provider, providerUserId) => {
+  const [rows] = await connection.query(
+    `SELECT u.id, u.email, u.verified, u.is_suspended
+     FROM user_social_accounts usa
+     JOIN users u ON u.id = usa.user_id
+     WHERE usa.provider = ? AND usa.provider_user_id = ?
+     LIMIT 1`,
+    [provider, providerUserId]
+  );
+  return rows[0] || null;
+};
+
+const loadUserByEmail = async (connection, email) => {
+  if (!email) return null;
+  const [rows] = await connection.query(
+    'SELECT id, email, verified, is_suspended FROM users WHERE email = ? LIMIT 1',
+    [email]
+  );
+  return rows[0] || null;
+};
+
+const upsertSocialAccount = async (connection, { userId, provider, providerUserId, email, emailVerified }) => {
+  await connection.query(
+    `INSERT INTO user_social_accounts
+     (id, user_id, provider, provider_user_id, email, email_verified, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())
+     ON DUPLICATE KEY UPDATE
+       email = VALUES(email),
+       email_verified = VALUES(email_verified),
+       updated_at = NOW()`,
+    [
+      uuidv4(),
+      userId,
+      provider,
+      providerUserId,
+      email || null,
+      emailVerified ? 1 : 0,
+    ]
+  );
+};
+
+const handleSocialLogin = async ({
+  provider,
+  providerUserId,
+  email,
+  emailVerified,
+  referralCode,
+  req,
+  deviceId,
+}) => {
+  const connection = await db.getConnection();
+  let user = null;
+  let created = false;
+
+  try {
+    await connection.beginTransaction();
+
+    user = await loadSocialUser(connection, provider, providerUserId);
+    if (!user) {
+      user = await loadUserByEmail(connection, email);
+    }
+
+    if (user && user.is_suspended) {
+      await connection.rollback();
+      return { error: { status: 403, message: 'Account is suspended' } };
+    }
+
+    if (!user) {
+      const userId = uuidv4();
+      const referredBy = await validateReferralCode(connection, referralCode);
+      const newReferralCode = await generateUniqueReferralCode(connection);
+
+      await connection.query(
+        `INSERT INTO users
+         (id, email, phone, password_hash, referral_code, referred_by, verified, otp_code, otp_expires, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NOW(), NOW())`,
+        [userId, email || null, null, null, newReferralCode, referredBy, true]
+      );
+
+      user = { id: userId, email: email || null, verified: true, is_suspended: false };
+      created = true;
+    } else {
+      const updates = [];
+      const values = [];
+      if (!user.verified) {
+        updates.push('verified = 1');
+        updates.push('otp_code = NULL');
+        updates.push('otp_expires = NULL');
+        user.verified = true;
+      }
+      if (email && !user.email) {
+        updates.push('email = ?');
+        values.push(email);
+        user.email = email;
+      }
+      if (updates.length) {
+        updates.push('updated_at = NOW()');
+        await connection.query(
+          `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
+          [...values, user.id]
+        );
+      }
+    }
+
+    await upsertSocialAccount(connection, {
+      userId: user.id,
+      provider,
+      providerUserId,
+      email,
+      emailVerified,
+    });
+
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback();
+    if (isMissingTableError(err)) {
+      return { error: { status: 503, message: 'Social sign-in unavailable. Apply latest migrations.' } };
+    }
+    throw err;
+  } finally {
+    connection.release();
+  }
+
+  const tokens = await issueTokens(user, req);
+  const deviceState = await registerUserDeviceLogin({ user, req, deviceId });
+  if (deviceState.isNewDeviceOrIp) {
+    sendNewDeviceLoginAlert({ email: user.email, req }).catch((err) => {
+      console.error('New device login email failed:', err.message);
+    });
+  }
+  if (created && user.email) {
+    sendWelcomeEmail({ email: user.email }).catch((err) => {
+      console.error('Welcome email failed:', err.message);
+    });
+  }
+
+  return { tokens };
+};
+
 // -------------------- POST /signup --------------------
 exports.signup = async (req, res) => {
   const { email, phone, referralCode, password } = req.body;
@@ -381,6 +534,92 @@ exports.resendOtp = async (req, res) => {
   } catch (err) {
     console.error('Resend OTP error:', err);
     res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// -------------------- POST /auth/google --------------------
+exports.googleSignIn = async (req, res) => {
+  const idToken = typeof req.body.idToken === 'string' ? req.body.idToken.trim() : '';
+  const { deviceId, referralCode } = req.body || {};
+
+  if (!idToken) {
+    return res.status(400).json({ error: 'idToken is required' });
+  }
+
+  try {
+    const payload = await verifyGoogleIdToken(idToken);
+    const providerUserId = payload && payload.sub ? String(payload.sub) : '';
+    if (!providerUserId) {
+      return res.status(401).json({ error: 'Invalid Google token' });
+    }
+
+    const email = normalizeSocialEmail(payload.email);
+    const emailVerified = normalizeEmailVerified(payload.email_verified);
+
+    const result = await handleSocialLogin({
+      provider: 'google',
+      providerUserId,
+      email,
+      emailVerified,
+      referralCode,
+      req,
+      deviceId,
+    });
+
+    if (result.error) {
+      return res.status(result.error.status).json({ error: result.error.message });
+    }
+
+    return res.json({ message: 'Login successful', ...result.tokens });
+  } catch (err) {
+    if (err && err.code === 'SOCIAL_CONFIG_MISSING') {
+      return res.status(503).json({ error: err.message });
+    }
+    console.error('Google sign-in error:', err);
+    return res.status(401).json({ error: 'Invalid Google token' });
+  }
+};
+
+// -------------------- POST /auth/apple --------------------
+exports.appleSignIn = async (req, res) => {
+  const identityToken = typeof req.body.identityToken === 'string' ? req.body.identityToken.trim() : '';
+  const { deviceId, referralCode } = req.body || {};
+
+  if (!identityToken) {
+    return res.status(400).json({ error: 'identityToken is required' });
+  }
+
+  try {
+    const payload = await verifyAppleIdentityToken(identityToken);
+    const providerUserId = payload && payload.sub ? String(payload.sub) : '';
+    if (!providerUserId) {
+      return res.status(401).json({ error: 'Invalid Apple token' });
+    }
+
+    const email = normalizeSocialEmail(payload.email);
+    const emailVerified = normalizeEmailVerified(payload.email_verified);
+
+    const result = await handleSocialLogin({
+      provider: 'apple',
+      providerUserId,
+      email,
+      emailVerified,
+      referralCode,
+      req,
+      deviceId,
+    });
+
+    if (result.error) {
+      return res.status(result.error.status).json({ error: result.error.message });
+    }
+
+    return res.json({ message: 'Login successful', ...result.tokens });
+  } catch (err) {
+    if (err && err.code === 'SOCIAL_CONFIG_MISSING') {
+      return res.status(503).json({ error: err.message });
+    }
+    console.error('Apple sign-in error:', err);
+    return res.status(401).json({ error: 'Invalid Apple token' });
   }
 };
 

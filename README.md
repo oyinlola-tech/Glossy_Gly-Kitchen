@@ -5,6 +5,7 @@ Production-focused Node.js + Express API for food ordering, payments, and admin 
 ## Core Security Features
 - JWT access + refresh tokens (user and admin domains separated)
 - OTP verification flows (signup, login OTP, forgot password OTP)
+- Social sign-in support (Google, Apple)
 - Rate limiting and OTP lockout protection
 - Role-based admin authorization (admin JWT, no shared admin API key for protected operations)
 - Input validation and UUID enforcement across endpoints
@@ -56,6 +57,7 @@ mysql -u root -p glossy_gly_kitchen < migrations/2026-02-12-saved-cards.sql
 mysql -u root -p glossy_gly_kitchen < migrations/2026-02-12-webhook-replay-protection.sql
 mysql -u root -p glossy_gly_kitchen < migrations/2026-02-12-user-auth-security.sql
 mysql -u root -p glossy_gly_kitchen < migrations/2026-02-12-user-account-deletion.sql
+mysql -u root -p glossy_gly_kitchen < migrations/2026-02-13-user-social-auth.sql
 ```
 
 ## API Docs
@@ -70,6 +72,7 @@ mysql -u root -p glossy_gly_kitchen < migrations/2026-02-12-user-account-deletio
 
 ## Main Route Groups
 - `/auth` user auth/profile/password flows
+- `/auth/google` + `/auth/apple` social sign-in flows
 - `/auth/delete-account/request-otp` + `/auth/delete-account` for OTP-protected account deletion
 - `/foods` menu + admin food management
 - `/cart` cart management
@@ -79,7 +82,7 @@ mysql -u root -p glossy_gly_kitchen < migrations/2026-02-12-user-account-deletio
 - `/health`, `/ready` system probes
 
 ## Environment
-See `.env.example` for complete keys.
+See `.env.example` for complete keys. Social sign-in requires `GOOGLE_CLIENT_ID` and `APPLE_CLIENT_ID`.
 
 ## Notes
 - Keep `NODE_ENV=production` in production.
