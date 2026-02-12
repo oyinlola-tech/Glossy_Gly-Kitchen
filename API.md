@@ -32,6 +32,15 @@ Response includes temporary `resetToken`.
 ### POST `/auth/forgot-password/reset`
 Body: `resetToken`, `newPassword`
 
+### POST `/auth/delete-account/request-otp`
+Headers: user bearer token  
+Sends OTP to the authenticated user's email for account deletion confirmation.
+
+### DELETE `/auth/delete-account`
+Headers: user bearer token  
+Body: `otp` (6 digits)  
+Deletes account permanently after OTP verification.
+
 ### POST `/auth/refresh`
 Body: `refreshToken`
 

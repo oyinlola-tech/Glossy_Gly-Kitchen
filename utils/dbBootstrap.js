@@ -1,5 +1,7 @@
 const mysql = require('mysql2/promise');
 
+const isSafeIdentifier = (value) => typeof value === 'string' && /^[A-Za-z0-9_]+$/.test(value);
+
 const TABLE_DEFINITIONS = [
   `CREATE TABLE IF NOT EXISTS users (
     id VARCHAR(36) PRIMARY KEY,
@@ -323,16 +325,33 @@ const ensureDatabaseAndTables = async () => {
   const user = process.env.DB_USER;
   const password = process.env.DB_PASSWORD;
   const dbName = process.env.DB_NAME;
+  if (!isSafeIdentifier(dbName)) {
+    throw new Error('Invalid DB_NAME. Use only letters, numbers, and underscore.');
+  }
+  const connectTimeout = Number(process.env.DB_CONNECT_TIMEOUT_MS) > 0
+    ? Number(process.env.DB_CONNECT_TIMEOUT_MS)
+    : 10000;
+  const bootstrapLockTimeoutSec = Number(process.env.DB_BOOTSTRAP_LOCK_TIMEOUT_SEC) > 0
+    ? Number(process.env.DB_BOOTSTRAP_LOCK_TIMEOUT_SEC)
+    : 30;
+  const bootstrapLockName = `bootstrap:${dbName}`;
 
   const adminConnection = await mysql.createConnection({
     host,
     port,
     user,
     password,
+    connectTimeout,
     multipleStatements: false,
   });
 
   try {
+    const [lockRows] = await adminConnection.query('SELECT GET_LOCK(?, ?) AS lock_acquired', [bootstrapLockName, bootstrapLockTimeoutSec]);
+    const lockAcquired = Array.isArray(lockRows) && lockRows[0] && Number(lockRows[0].lock_acquired) === 1;
+    if (!lockAcquired) {
+      throw new Error(`Failed to acquire bootstrap lock within ${bootstrapLockTimeoutSec}s`);
+    }
+
     await adminConnection.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
     await adminConnection.query(`USE \`${dbName}\``);
 
@@ -390,6 +409,11 @@ const ensureDatabaseAndTables = async () => {
       definition: 'coupon_discount_value DECIMAL(10,2)',
     });
   } finally {
+    try {
+      await adminConnection.query('SELECT RELEASE_LOCK(?)', [bootstrapLockName]);
+    } catch (_) {
+      // Ignore release failures; connection close will eventually release lock.
+    }
     await adminConnection.end();
   }
 };

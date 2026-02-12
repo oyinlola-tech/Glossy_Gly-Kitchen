@@ -16,9 +16,10 @@ const otpIdentityLimiter = rateLimit({
     ? Number(process.env.OTP_IDENTITY_RATE_LIMIT_MAX)
     : 10,
   keyGenerator: (req) => {
+    const authUserId = req.user && req.user.id ? String(req.user.id).trim().toLowerCase().slice(0, 128) : '';
     const userId = req.body && req.body.userId ? String(req.body.userId).trim().toLowerCase().slice(0, 128) : '';
     const email = req.body && req.body.email ? String(req.body.email).trim().toLowerCase().slice(0, 128) : '';
-    const identity = userId || email || 'unknown';
+    const identity = authUserId || userId || email || 'unknown';
     return `otp:${req.path}:${req.ip}:${identity}`;
   },
 });
@@ -36,7 +37,7 @@ router.post('/refresh', authLimiter, authController.refresh);
 router.post('/logout', authLimiter, requireAuth, authController.logout);
 router.post('/logout-all', authLimiter, requireAuth, authController.logoutAll);
 router.post('/delete-account/request-otp', authLimiter, requireAuth, authController.requestAccountDeletionOtp);
-router.delete('/delete-account', authLimiter, otpIdentityLimiter, requireAuth, authController.deleteAccount);
+router.delete('/delete-account', authLimiter, requireAuth, otpIdentityLimiter, authController.deleteAccount);
 router.get('/me', requireAuth, authController.me);
 router.patch('/me', requireAuth, authController.updateMe);
 router.post('/referral-code/generate', requireAuth, authController.generateReferralCode);

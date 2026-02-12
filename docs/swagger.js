@@ -7,8 +7,8 @@ const options = {
     openapi: '3.0.3',
     info: {
       title: 'Glossy_Gly-Kitchen API',
-      version: '1.3.0',
-      description: 'Production-ready food ordering backend API with auth, admin, foods, cart, orders, and disputes.',
+      version: '1.4.0',
+      description: 'Production-ready food ordering backend API with auth, account-deletion OTP flow, admin, foods, cart, orders, payments, and disputes.',
     },
     servers: [
       {
