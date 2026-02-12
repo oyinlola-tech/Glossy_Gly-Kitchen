@@ -7,6 +7,7 @@ const { securityHeaders, cors, requireJson, rateLimit } = require('./utils/secur
 const { requestId, requestLogger } = require('./utils/requestLogger');
 const { validateConfig } = require('./utils/config');
 const { ensureSeedAdmin } = require('./utils/adminSeed');
+const { ensureDatabaseAndTables } = require('./utils/dbBootstrap');
 
 const app = express();
 
@@ -82,6 +83,10 @@ const PORT = Number(process.env.PORT);
 validateConfig();
 let server;
 const startServer = async () => {
+  await ensureDatabaseAndTables();
+  const connection = await db.getConnection();
+  connection.release();
+  console.log('Database ready');
   await ensureSeedAdmin();
   server = app.listen(PORT, () => {
     console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);

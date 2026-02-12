@@ -14,6 +14,9 @@ const {
   buildPasswordResetOtpEmail,
   buildPasswordChangedEmail,
   buildNewDeviceLoginAlertEmail,
+  buildWelcomeEmail,
+  buildAccountDeletionOtpEmail,
+  buildAccountDeletedGoodbyeEmail,
 } = require('../utils/emailTemplates');
 
 const DUMMY_PASSWORD_HASH = '$2a$10$7EqJtq98hPqEX7fNZaFWoOaJY8fDeihh5Z8SGvtQvE4H14R/2uOe';
@@ -24,6 +27,15 @@ const PASSWORD_RESET_SESSION_MINUTES = Number(process.env.PASSWORD_RESET_SESSION
 
 const isMissingTableError = (err) => {
   return Boolean(err && (err.code === 'ER_NO_SUCH_TABLE' || err.errno === 1146));
+};
+
+const runDeleteIfTableExists = async (connection, sql, params = []) => {
+  try {
+    await connection.query(sql, params);
+  } catch (err) {
+    if (isMissingTableError(err)) return;
+    throw err;
+  }
 };
 
 const normalizeRefreshToken = (value) => {
@@ -111,6 +123,24 @@ const sendNewDeviceLoginAlert = async ({ email, req }) => {
     userAgent: req.get('user-agent') || null,
     loginAt: new Date().toISOString(),
   });
+  await sendMail({ to: email, subject: template.subject, html: template.html, text: template.text });
+};
+
+const sendWelcomeEmail = async ({ email }) => {
+  if (!email) return;
+  const template = buildWelcomeEmail({ email });
+  await sendMail({ to: email, subject: template.subject, html: template.html, text: template.text });
+};
+
+const sendAccountDeletionOtpEmail = async ({ email, otp }) => {
+  if (!email) return;
+  const template = buildAccountDeletionOtpEmail({ otp });
+  await sendMail({ to: email, subject: template.subject, html: template.html, text: template.text });
+};
+
+const sendAccountDeletedGoodbyeEmail = async ({ email }) => {
+  if (!email) return;
+  const template = buildAccountDeletedGoodbyeEmail({ email });
   await sendMail({ to: email, subject: template.subject, html: template.html, text: template.text });
 };
 
@@ -302,6 +332,9 @@ exports.verify = async (req, res) => {
 
     clearFailures('verify', userIdValue);
     const tokens = await issueTokens({ id: userIdValue, email: users[0].email }, req);
+    sendWelcomeEmail({ email: users[0].email }).catch((err) => {
+      console.error('Welcome email failed:', err.message);
+    });
     res.json({ message: 'Account verified successfully.', ...tokens });
 
   } catch (err) {
@@ -1033,6 +1066,158 @@ exports.generateReferralCode = async (req, res) => {
   } catch (err) {
     await connection.rollback();
     console.error('Generate referral code error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
+  }
+};
+
+// -------------------- POST /auth/delete-account/request-otp --------------------
+exports.requestAccountDeletionOtp = async (req, res) => {
+  const userId = req.user && req.user.id;
+  if (!userId || !isUuid(userId)) {
+    return res.status(401).json({ error: 'Authorization token required' });
+  }
+
+  try {
+    const [users] = await db.query(
+      'SELECT id, email, verified, is_suspended FROM users WHERE id = ?',
+      [userId]
+    );
+    if (users.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = users[0];
+    if (!user.verified || user.is_suspended) {
+      return res.status(400).json({ error: 'Account is not active' });
+    }
+    if (!user.email) {
+      return res.status(400).json({ error: 'Email is required to verify account deletion' });
+    }
+
+    const otp = generateOtp();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+
+    await db.query(
+      `UPDATE user_account_deletion_otps
+       SET consumed_at = NOW()
+       WHERE user_id = ? AND consumed_at IS NULL`,
+      [userId]
+    );
+    await db.query(
+      `INSERT INTO user_account_deletion_otps
+       (id, user_id, otp_code, otp_expires, consumed_at, created_at)
+       VALUES (?, ?, ?, ?, NULL, NOW())`,
+      [uuidv4(), userId, otp, otpExpires]
+    );
+
+    await sendAccountDeletionOtpEmail({ email: user.email, otp });
+    return res.json({ message: 'Account deletion OTP sent to your email' });
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      return res.status(503).json({ error: 'Account deletion service unavailable. Apply latest migrations.' });
+    }
+    console.error('Request account deletion OTP error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// -------------------- DELETE /auth/delete-account --------------------
+exports.deleteAccount = async (req, res) => {
+  const userId = req.user && req.user.id;
+  const otp = typeof req.body.otp === 'string' ? req.body.otp.trim() : '';
+  const lockIdentity = `delete-account:${userId}`;
+
+  if (!userId || !isUuid(userId)) {
+    return res.status(401).json({ error: 'Authorization token required' });
+  }
+  if (!/^\d{6}$/.test(otp)) {
+    return res.status(400).json({ error: 'Valid otp is required' });
+  }
+
+  const lockState = isLocked('delete-account', lockIdentity);
+  if (lockState.locked) {
+    res.setHeader('Retry-After', String(lockState.retryAfterSec));
+    return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [users] = await connection.query(
+      'SELECT id, email FROM users WHERE id = ? FOR UPDATE',
+      [userId]
+    );
+    if (users.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const user = users[0];
+
+    const [otpRows] = await connection.query(
+      `SELECT id, otp_code, otp_expires, consumed_at
+       FROM user_account_deletion_otps
+       WHERE user_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [userId]
+    );
+
+    if (
+      otpRows.length === 0 ||
+      otpRows[0].consumed_at ||
+      otpRows[0].otp_code !== otp ||
+      !otpRows[0].otp_expires ||
+      new Date(otpRows[0].otp_expires) <= new Date()
+    ) {
+      await connection.rollback();
+      const fail = recordFailure('delete-account', lockIdentity);
+      if (fail.locked) {
+        res.setHeader('Retry-After', String(fail.retryAfterSec));
+        return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+      }
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    }
+
+    await connection.query(
+      'UPDATE user_account_deletion_otps SET consumed_at = NOW() WHERE id = ?',
+      [otpRows[0].id]
+    );
+    await runDeleteIfTableExists(connection, 'DELETE FROM refresh_tokens WHERE user_id = ?', [userId]);
+    await runDeleteIfTableExists(connection, 'DELETE FROM user_trusted_devices WHERE user_id = ?', [userId]);
+    await runDeleteIfTableExists(connection, 'DELETE FROM user_password_reset_otps WHERE user_id = ?', [userId]);
+    await runDeleteIfTableExists(connection, 'DELETE FROM user_password_reset_sessions WHERE user_id = ?', [userId]);
+    await runDeleteIfTableExists(connection, 'DELETE FROM user_account_deletion_otps WHERE user_id = ?', [userId]);
+    await runDeleteIfTableExists(connection, 'DELETE FROM cart_items WHERE user_id = ?', [userId]);
+    await runDeleteIfTableExists(connection, 'DELETE FROM coupon_redemptions WHERE user_id = ?', [userId]);
+    await runDeleteIfTableExists(connection, 'DELETE FROM payments WHERE user_id = ?', [userId]);
+    await runDeleteIfTableExists(connection, 'DELETE FROM orders WHERE user_id = ?', [userId]);
+
+    const [deleteResult] = await connection.query(
+      'DELETE FROM users WHERE id = ?',
+      [userId]
+    );
+    if (!deleteResult || deleteResult.affectedRows !== 1) {
+      await connection.rollback();
+      return res.status(500).json({ error: 'Failed to delete account' });
+    }
+
+    await connection.commit();
+    clearFailures('delete-account', lockIdentity);
+
+    sendAccountDeletedGoodbyeEmail({ email: user.email }).catch((err) => {
+      console.error('Goodbye email failed:', err.message);
+    });
+    return res.json({ message: 'Account deleted successfully' });
+  } catch (err) {
+    await connection.rollback();
+    if (isMissingTableError(err)) {
+      return res.status(503).json({ error: 'Account deletion service unavailable. Apply latest migrations.' });
+    }
+    console.error('Delete account error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   } finally {
     connection.release();

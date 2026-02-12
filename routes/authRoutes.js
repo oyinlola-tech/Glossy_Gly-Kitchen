@@ -35,6 +35,8 @@ router.post('/forgot-password/reset', authLimiter, authController.resetPasswordW
 router.post('/refresh', authLimiter, authController.refresh);
 router.post('/logout', authLimiter, requireAuth, authController.logout);
 router.post('/logout-all', authLimiter, requireAuth, authController.logoutAll);
+router.post('/delete-account/request-otp', authLimiter, requireAuth, authController.requestAccountDeletionOtp);
+router.delete('/delete-account', authLimiter, otpIdentityLimiter, requireAuth, authController.deleteAccount);
 router.get('/me', requireAuth, authController.me);
 router.patch('/me', requireAuth, authController.updateMe);
 router.post('/referral-code/generate', requireAuth, authController.generateReferralCode);

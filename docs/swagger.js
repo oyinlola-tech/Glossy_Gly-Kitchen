@@ -127,6 +127,13 @@ const options = {
             email: { type: 'string', format: 'email' },
           },
         },
+        DeleteAccountRequest: {
+          type: 'object',
+          required: ['otp'],
+          properties: {
+            otp: { type: 'string', description: '6-digit OTP sent to your email' },
+          },
+        },
         AuthTokensResponse: {
           type: 'object',
           properties: {
@@ -592,6 +599,43 @@ const options = {
           responses: {
             '200': { description: 'All sessions logged out' },
             '401': { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/auth/delete-account/request-otp': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Send account-deletion OTP to current user email',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': { description: 'OTP sent' },
+            '400': { description: 'Account not active or missing email' },
+            '401': { description: 'Unauthorized' },
+            '404': { description: 'User not found' },
+            '503': { description: 'Account deletion service unavailable (migration missing)' },
+          },
+        },
+      },
+      '/auth/delete-account': {
+        delete: {
+          tags: ['Auth'],
+          summary: 'Delete current user account permanently using OTP verification',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/DeleteAccountRequest' },
+              },
+            },
+          },
+          responses: {
+            '200': { description: 'Account deleted successfully' },
+            '400': { description: 'Invalid or expired OTP' },
+            '401': { description: 'Unauthorized' },
+            '404': { description: 'User not found' },
+            '429': { description: 'Too many invalid OTP attempts' },
+            '503': { description: 'Account deletion service unavailable (migration missing)' },
           },
         },
       },
