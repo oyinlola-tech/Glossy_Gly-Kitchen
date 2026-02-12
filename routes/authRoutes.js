@@ -5,7 +5,7 @@ const { rateLimit } = require('../utils/security');
 
 const authLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: Number(process.env.AUTH_RATE_LIMIT_MAX) || 10,
+  max: Number(process.env.AUTH_RATE_LIMIT_MAX),
   keyGenerator: (req) => `auth:${req.ip}`,
 });
 

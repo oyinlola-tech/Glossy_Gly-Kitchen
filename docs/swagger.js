@@ -1,15 +1,14 @@
 const swaggerJSDoc = require('swagger-jsdoc');
 
-const port = process.env.PORT || 3000;
-const serverUrl = process.env.SWAGGER_SERVER_URL || `http://localhost:${port}`;
+const serverUrl = process.env.SWAGGER_SERVER_URL;
 
 const options = {
   definition: {
     openapi: '3.0.3',
     info: {
-      title: 'Chuks Kitchen API',
-      version: '1.0.0',
-      description: 'Food ordering backend API with auth, foods, cart, and orders.',
+      title: 'Glossy_Gly-Kitchen API',
+      version: '1.2.0',
+      description: 'Production-ready food ordering backend API with auth, admin, foods, cart, orders, and disputes.',
     },
     servers: [
       {
@@ -238,6 +237,9 @@ const options = {
           properties: {
             email: { type: 'string', format: 'email' },
             password: { type: 'string' },
+            otp: { type: 'string', description: 'Required for new device or changed IP' },
+            deviceId: { type: 'string', description: 'Stable client-generated device identifier' },
+            deviceLabel: { type: 'string', description: 'Human-friendly device name' },
           },
         },
         AdminBootstrapRequest: {
@@ -762,7 +764,7 @@ const options = {
       '/admin/auth/login': {
         post: {
           tags: ['Admin'],
-          summary: 'Admin login',
+          summary: 'Admin login (requires OTP on new device/IP)',
           requestBody: {
             required: true,
             content: {
@@ -773,6 +775,7 @@ const options = {
           },
           responses: {
             '200': { description: 'Login successful' },
+            '202': { description: 'OTP required for this device/IP' },
             '401': { description: 'Unauthorized' },
           },
         },

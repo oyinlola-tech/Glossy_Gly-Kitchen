@@ -1,7 +1,7 @@
-# Chuks Kitchen Food Ordering System Backend API
+# Glossy_Gly-Kitchen Food Ordering System Backend API
 
 ## Overview
-Chuks Kitchen is a production-ready Node.js + Express backend for a food ordering system with email OTP verification, JWT authentication, cart management, and order processing. It uses MySQL (AMPPs) with `mysql2/promise`, Nodemailer (Gmail SMTP), UUIDs for identifiers, and includes security hardening, logging, audit trails, and readiness checks.
+Glossy_Gly-Kitchen is a production-ready Node.js + Express backend for a food ordering system with email OTP verification, JWT authentication, cart management, and order processing. It uses MySQL (AMPPs) with `mysql2/promise`, Nodemailer (Gmail SMTP), UUIDs for identifiers, and includes security hardening, logging, audit trails, and readiness checks.
 
 ## Features
 - Signup with email + password and optional referral code
@@ -57,11 +57,14 @@ ADMIN_API_KEY=change_me
 ADMIN_BOOTSTRAP_KEY=change_me_bootstrap
 JWT_SECRET=change_me
 JWT_EXPIRES_IN=15m
-JWT_ISSUER=chuks-kitchen
-ADMIN_JWT_ISSUER=chuks-kitchen-admin
+JWT_ISSUER=glossy-gly-kitchen
+ADMIN_JWT_ISSUER=glossy-gly-kitchen-admin
 ADMIN_JWT_EXPIRES_IN=15m
 REFRESH_TOKEN_EXPIRES_DAYS=30
 ADMIN_REFRESH_TOKEN_EXPIRES_DAYS=30
+DEFAULT_ADMIN_EMAIL=oyinlola.tech@icloud.com
+DEFAULT_ADMIN_PASSWORD=ChangeThisStrongAdminPassword123!
+DEFAULT_ADMIN_FULL_NAME=Glossy_Gly-Kitchen Super Admin
 PASSWORD_MIN_LENGTH=8
 BCRYPT_ROUNDS=12
 RATE_LIMIT_MAX=120
@@ -75,12 +78,12 @@ LOG_FILE=logs/app.log
 DB_HOST=localhost
 DB_USER=root
 DB_PASSWORD=your_password
-DB_NAME=chuks_kitchen
+DB_NAME=glossy_gly_kitchen
 
 # Email (Nodemailer – Gmail)
 EMAIL_USER=your_email@gmail.com
 EMAIL_PASS=your_app_password
-EMAIL_FROM="Chuks Kitchen <your_email@gmail.com>"
+EMAIL_FROM="Glossy_Gly-Kitchen <your_email@gmail.com>"
 ```
 
 4. Import the database schema:
@@ -91,7 +94,7 @@ mysql -u root -p < schema.sql
 
 For existing databases, apply the admin-system migration instead of resetting everything:
 ```bash
-mysql -u root -p chuks_kitchen < migrations/2026-02-12-admin-system.sql
+mysql -u root -p glossy_gly_kitchen < migrations/2026-02-12-admin-system.sql
 ```
 
 5. Start the server:
@@ -109,11 +112,14 @@ npm run dev
 | `ADMIN_BOOTSTRAP_KEY` | Key for one-time admin bootstrap endpoint | `change_me_bootstrap` |
 | `JWT_SECRET` | JWT signing secret | `change_me` |
 | `JWT_EXPIRES_IN` | Access token TTL | `15m` |
-| `JWT_ISSUER` | JWT issuer | `chuks-kitchen` |
-| `ADMIN_JWT_ISSUER` | Admin JWT issuer | `chuks-kitchen-admin` |
+| `JWT_ISSUER` | JWT issuer | `glossy-gly-kitchen` |
+| `ADMIN_JWT_ISSUER` | Admin JWT issuer | `glossy-gly-kitchen-admin` |
 | `ADMIN_JWT_EXPIRES_IN` | Admin access token TTL | `15m` |
 | `REFRESH_TOKEN_EXPIRES_DAYS` | Refresh token TTL (days) | `30` |
 | `ADMIN_REFRESH_TOKEN_EXPIRES_DAYS` | Admin refresh token TTL (days) | `30` |
+| `DEFAULT_ADMIN_EMAIL` | Auto-seeded admin email | `oyinlola.tech@icloud.com` |
+| `DEFAULT_ADMIN_PASSWORD` | Auto-seeded admin password | `ChangeThisStrongAdminPassword123!` |
+| `DEFAULT_ADMIN_FULL_NAME` | Auto-seeded admin full name | `Glossy_Gly-Kitchen Super Admin` |
 | `PASSWORD_MIN_LENGTH` | Minimum password length | `8` |
 | `BCRYPT_ROUNDS` | bcrypt salt rounds | `12` |
 | `RATE_LIMIT_MAX` | Global requests/min | `120` |
@@ -126,10 +132,10 @@ npm run dev
 | `DB_HOST` | MySQL host | `localhost` |
 | `DB_USER` | MySQL user | `root` |
 | `DB_PASSWORD` | MySQL password | `your_password` |
-| `DB_NAME` | MySQL database | `chuks_kitchen` |
+| `DB_NAME` | MySQL database | `glossy_gly_kitchen` |
 | `EMAIL_USER` | Gmail address | `your_email@gmail.com` |
 | `EMAIL_PASS` | Gmail App Password | `your_app_password` |
-| `EMAIL_FROM` | Sender name | `Chuks Kitchen <your_email@gmail.com>` |
+| `EMAIL_FROM` | Sender name | `Glossy_Gly-Kitchen <your_email@gmail.com>` |
 
 ## Running the App
 - Development:
@@ -232,7 +238,7 @@ curl -X POST http://localhost:3000/cart \
 
 ## System Documentation
 ### System Overview (End-to-End)
-Chuks Kitchen is a backend API that powers user registration, menu browsing, cart management, and order processing. The full end-to-end flow is:
+Glossy_Gly-Kitchen is a backend API that powers user registration, menu browsing, cart management, and order processing. The full end-to-end flow is:
 
 1. User signup with email + password (optional referral code), OTP generated and emailed.
 2. OTP verification marks the user verified and issues access + refresh tokens.
@@ -300,7 +306,7 @@ Chuks Kitchen is a backend API that powers user registration, menu browsing, car
 6. Role-based admin accounts instead of shared admin key.
 
 ## License
-ISC
+Private and proprietary. See `LICENSE`.
 
 ## Author
 OLUWAYEMI OYINLOLA MICHAEL

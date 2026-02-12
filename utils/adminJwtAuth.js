@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const db = require('../config/db');
 const { isUuid } = require('./validation');
 
-const adminIssuer = () => process.env.ADMIN_JWT_ISSUER || `${process.env.JWT_ISSUER || 'chuks-kitchen'}-admin`;
+const adminIssuer = () => process.env.ADMIN_JWT_ISSUER;
 
 const hashAdminAuditId = (adminId) => crypto.createHash('sha256').update(adminId, 'utf8').digest('hex');
 

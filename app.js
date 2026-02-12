@@ -6,6 +6,7 @@ const { swaggerSpec } = require('./docs/swagger');
 const { securityHeaders, cors, requireJson, rateLimit } = require('./utils/security');
 const { requestId, requestLogger } = require('./utils/requestLogger');
 const { validateConfig } = require('./utils/config');
+const { ensureSeedAdmin } = require('./utils/adminSeed');
 
 const app = express();
 
@@ -25,7 +26,7 @@ app.use(requestLogger);
 // Basic rate limiting
 app.use(rateLimit({
   windowMs: 60 * 1000,
-  max: Number(process.env.RATE_LIMIT_MAX) || 120,
+  max: Number(process.env.RATE_LIMIT_MAX),
 }));
 
 // Routes
@@ -71,14 +72,27 @@ app.use((err, req, res, next) => {
   return res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT);
 validateConfig();
-const server = app.listen(PORT, () => {
-  console.log(` Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+let server;
+const startServer = async () => {
+  await ensureSeedAdmin();
+  server = app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+  });
+};
+
+startServer().catch((err) => {
+  console.error('Failed to start server:', err.message);
+  process.exit(1);
 });
 
 const shutdown = async (signal) => {
   console.log(`Received ${signal}. Shutting down...`);
+  if (!server) {
+    process.exit(0);
+    return;
+  }
   server.close(async () => {
     try {
       await db.end();
@@ -88,9 +102,22 @@ const shutdown = async (signal) => {
       process.exit(1);
     }
   });
+
+  setTimeout(() => {
+    console.error('Forced shutdown due to timeout');
+    process.exit(1);
+  }, 10_000).unref();
 };
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+  shutdown('UNHANDLED_REJECTION');
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+  shutdown('UNCAUGHT_EXCEPTION');
+});
 
 module.exports = app;

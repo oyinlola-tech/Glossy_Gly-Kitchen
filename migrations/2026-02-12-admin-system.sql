@@ -1,4 +1,4 @@
-USE chuks_kitchen;
+USE glossy_gly_kitchen;
 
 ALTER TABLE users
   ADD COLUMN is_suspended BOOLEAN DEFAULT FALSE;

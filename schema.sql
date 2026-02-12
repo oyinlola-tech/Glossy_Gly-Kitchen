@@ -1,7 +1,7 @@
 -- Drop database if exists (be careful in production!)
-DROP DATABASE IF EXISTS chuks_kitchen;
-CREATE DATABASE chuks_kitchen;
-USE chuks_kitchen;
+DROP DATABASE IF EXISTS glossy_gly_kitchen;
+CREATE DATABASE glossy_gly_kitchen;
+USE glossy_gly_kitchen;
 
 -- Users table
 CREATE TABLE users (

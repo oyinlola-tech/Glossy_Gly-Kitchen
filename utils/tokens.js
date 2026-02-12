@@ -9,12 +9,12 @@ const hashToken = (token) => {
 };
 
 const refreshExpiryDate = () => {
-  const days = Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS) || 30;
+  const days = Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS);
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 };
 
 const adminRefreshExpiryDate = () => {
-  const days = Number(process.env.ADMIN_REFRESH_TOKEN_EXPIRES_DAYS) || Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS) || 30;
+  const days = Number(process.env.ADMIN_REFRESH_TOKEN_EXPIRES_DAYS);
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 };
 

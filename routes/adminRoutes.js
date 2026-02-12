@@ -7,7 +7,7 @@ const { auditAdminAction } = require('../utils/audit');
 
 const adminAuthLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: Number(process.env.ADMIN_AUTH_RATE_LIMIT_MAX) || 15,
+  max: Number(process.env.ADMIN_AUTH_RATE_LIMIT_MAX),
   keyGenerator: (req) => `admin-auth:${req.ip}`,
 });
 

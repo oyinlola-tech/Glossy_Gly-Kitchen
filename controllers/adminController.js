@@ -1,11 +1,14 @@
 const db = require('../config/db');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 const { v4: uuidv4 } = require('uuid');
 const { isUuid, isValidEmail, toInt } = require('../utils/validation');
 const { validatePassword, hashPassword, comparePassword } = require('../utils/password');
 const { createRefreshToken, hashToken, adminRefreshExpiryDate } = require('../utils/tokens');
 const { isTransitionAllowed } = require('../utils/statusTransitions');
 const { adminIssuer } = require('../utils/adminJwtAuth');
+const generateOtp = require('../utils/generateOtp');
 
 const parsePaging = (req) => {
   const page = Math.max(toInt(req.query.page) || 1, 1);
@@ -14,12 +17,57 @@ const parsePaging = (req) => {
   return { page, limit, offset };
 };
 
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+const getDeviceFingerprint = (req, bodyDeviceId) => {
+  const headerDeviceId = req.get('x-device-id');
+  const deviceIdentity = headerDeviceId || bodyDeviceId || req.get('user-agent') || 'unknown-device';
+  return crypto.createHash('sha256').update(deviceIdentity, 'utf8').digest('hex');
+};
+
+const sendAdminOtpEmail = async (email, otp) => {
+  await transporter.sendMail({
+    from: process.env.EMAIL_FROM,
+    to: email,
+    subject: 'Glossy_Gly-Kitchen - Admin Login OTP Verification',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #0f766e;">Glossy_Gly-Kitchen Admin Security Check</h2>
+        <p>A login was detected from a new device or IP. Use this OTP to continue:</p>
+        <div style="background: #f5f5f5; padding: 15px; font-size: 24px; font-weight: bold; text-align: center; letter-spacing: 5px;">
+          ${otp}
+        </div>
+        <p>This code expires in 10 minutes.</p>
+      </div>
+    `,
+  });
+};
+
+const markDeviceTrusted = async (adminId, deviceHash, req, deviceLabel) => {
+  await db.query(
+    `INSERT INTO admin_trusted_devices (id, admin_id, device_hash, device_label, last_ip, last_seen_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, NOW(), NOW(), NOW())
+     ON DUPLICATE KEY UPDATE
+       device_label = VALUES(device_label),
+       last_ip = VALUES(last_ip),
+       last_seen_at = NOW(),
+       updated_at = NOW()`,
+    [uuidv4(), adminId, deviceHash, deviceLabel || null, req.ip]
+  );
+};
+
 const issueAdminAccessToken = (admin) => {
   return jwt.sign(
     { sub: admin.id, email: admin.email, role: admin.role, typ: 'admin' },
     process.env.JWT_SECRET,
     {
-      expiresIn: process.env.ADMIN_JWT_EXPIRES_IN || '15m',
+      expiresIn: process.env.ADMIN_JWT_EXPIRES_IN,
       issuer: adminIssuer(),
     }
   );
@@ -112,7 +160,7 @@ exports.bootstrap = async (req, res) => {
 };
 
 exports.login = async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, otp, deviceId, deviceLabel } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: 'email and password are required' });
   }
@@ -139,6 +187,61 @@ exports.login = async (req, res) => {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
 
+    const deviceHash = getDeviceFingerprint(req, deviceId);
+    const [trustedRows] = await db.query(
+      'SELECT id, last_ip FROM admin_trusted_devices WHERE admin_id = ? AND device_hash = ?',
+      [admin.id, deviceHash]
+    );
+
+    const trustedDevice = trustedRows.length > 0 ? trustedRows[0] : null;
+    const requiresOtp = !trustedDevice || (trustedDevice.last_ip && trustedDevice.last_ip !== req.ip);
+
+    if (requiresOtp) {
+      if (!otp) {
+        const otpCode = generateOtp();
+        const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+
+        await db.query(
+          `UPDATE admin_login_otps
+           SET consumed_at = NOW()
+           WHERE admin_id = ? AND device_hash = ? AND ip_address = ? AND consumed_at IS NULL`,
+          [admin.id, deviceHash, req.ip]
+        );
+
+        await db.query(
+          `INSERT INTO admin_login_otps (id, admin_id, device_hash, ip_address, otp_code, otp_expires, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+          [uuidv4(), admin.id, deviceHash, req.ip, otpCode, otpExpires]
+        );
+
+        await sendAdminOtpEmail(admin.email, otpCode);
+        return res.status(202).json({
+          message: 'OTP verification required for this device or IP. Please submit login again with otp.',
+          otpRequired: true,
+        });
+      }
+
+      const [otpRows] = await db.query(
+        `SELECT id, otp_code, otp_expires
+         FROM admin_login_otps
+         WHERE admin_id = ? AND device_hash = ? AND ip_address = ? AND consumed_at IS NULL
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [admin.id, deviceHash, req.ip]
+      );
+
+      if (
+        otpRows.length === 0 ||
+        otpRows[0].otp_code !== String(otp) ||
+        new Date(otpRows[0].otp_expires) <= new Date()
+      ) {
+        return res.status(400).json({ error: 'Invalid or expired admin OTP' });
+      }
+
+      await db.query('UPDATE admin_login_otps SET consumed_at = NOW() WHERE id = ?', [otpRows[0].id]);
+    }
+
+    await markDeviceTrusted(admin.id, deviceHash, req, deviceLabel);
     await db.query('UPDATE admin_users SET last_login_at = NOW(), updated_at = NOW() WHERE id = ?', [admin.id]);
     const tokens = await issueAdminTokens(admin, req);
 

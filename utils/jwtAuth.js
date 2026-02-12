@@ -18,7 +18,7 @@ const requireAuth = async (req, res, next) => {
 
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET, {
-      issuer: process.env.JWT_ISSUER || 'chuks-kitchen',
+      issuer: process.env.JWT_ISSUER,
     });
     if (!payload || !payload.sub || !isUuid(payload.sub)) {
       return res.status(401).json({ error: 'Invalid token' });

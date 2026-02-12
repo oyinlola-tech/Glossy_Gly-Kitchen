@@ -1,4 +1,4 @@
-# Chuks Kitchen Food Ordering System Backend API
+# Glossy_Gly-Kitchen Food Ordering System Backend API
 
 ## Base URL
 `http://localhost:3000`
@@ -523,7 +523,7 @@ Readiness check (verifies DB connectivity).
 Create the first admin account (or seed admin accounts in controlled setups).
 
 ### POST `/admin/auth/login`
-Admin login with email/password, returns admin access + refresh tokens.
+Admin login with email/password. If the login is from a new device or changed IP, OTP verification is required.
 
 ### POST `/admin/auth/refresh`
 Rotate admin refresh token and get new admin access token.

@@ -1,4 +1,4 @@
-const db = require('../config/db');
+﻿const db = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
 const generateOtp = require('../utils/generateOtp');
 const { generateReferralCode, validateReferralCode } = require('../utils/referralHelper');
@@ -16,7 +16,7 @@ const issueAccessToken = (user) => {
   return jwt.sign(
     { sub: user.id, email: user.email || null },
     secret,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '15m', issuer: process.env.JWT_ISSUER || 'chuks-kitchen' }
+    { expiresIn: process.env.JWT_EXPIRES_IN, issuer: process.env.JWT_ISSUER }
   );
 };
 
@@ -62,10 +62,10 @@ const sendOtpEmail = async (email, otp) => {
   const mailOptions = {
     from: process.env.EMAIL_FROM,
     to: email,
-    subject: 'Chuks Kitchen – Verify Your Account',
+    subject: 'Glossy_Gly-Kitchen - Verify Your Account',
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #ff6b35;">Welcome to Chuks Kitchen!</h2>
+        <h2 style="color: #ff6b35;">Welcome to Glossy_Gly-Kitchen!</h2>
         <p>Your OTP for account verification is:</p>
         <div style="background: #f5f5f5; padding: 15px; font-size: 24px; font-weight: bold; text-align: center; letter-spacing: 5px;">
           ${otp}
@@ -73,7 +73,7 @@ const sendOtpEmail = async (email, otp) => {
         <p>This code will expire in 10 minutes.</p>
         <p>If you didn't request this, please ignore this email.</p>
         <br>
-        <p>Cheers,<br>Chuks Kitchen Team</p>
+        <p>Cheers,<br>Glossy_Gly-Kitchen Team</p>
       </div>
     `,
   };
@@ -397,3 +397,4 @@ exports.logout = async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 };
+
