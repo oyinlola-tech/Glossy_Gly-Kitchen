@@ -64,12 +64,12 @@ const issueAdminAccessToken = (admin) => {
   );
 };
 
-const issueAdminRefreshToken = async (adminId, req) => {
+const issueAdminRefreshToken = async (adminId, req, queryable = db) => {
   const token = createRefreshToken();
   const tokenHash = hashToken(token);
   const expiresAt = adminRefreshExpiryDate();
 
-  await db.query(
+  await queryable.query(
     `INSERT INTO admin_refresh_tokens
      (id, admin_id, token_hash, expires_at, created_ip, user_agent, created_at)
      VALUES (?, ?, ?, ?, ?, ?, NOW())`,
@@ -79,9 +79,9 @@ const issueAdminRefreshToken = async (adminId, req) => {
   return token;
 };
 
-const issueAdminTokens = async (admin, req) => {
+const issueAdminTokens = async (admin, req, queryable = db) => {
   const accessToken = issueAdminAccessToken(admin);
-  const refreshToken = await issueAdminRefreshToken(admin.id, req);
+  const refreshToken = await issueAdminRefreshToken(admin.id, req, queryable);
   return { accessToken, refreshToken };
 };
 
@@ -258,39 +258,54 @@ exports.refresh = async (req, res) => {
     return res.status(400).json({ error: 'refreshToken is required' });
   }
 
+  const connection = await db.getConnection();
   try {
+    await connection.beginTransaction();
+
     const tokenHash = hashToken(refreshToken);
-    const [rows] = await db.query(
+    const [rows] = await connection.query(
       `SELECT id, admin_id, expires_at, revoked_at
        FROM admin_refresh_tokens
-       WHERE token_hash = ?`,
+       WHERE token_hash = ?
+       FOR UPDATE`,
       [tokenHash]
     );
 
     if (rows.length === 0) {
+      await connection.rollback();
       return res.status(401).json({ error: 'Invalid refresh token' });
     }
 
     const tokenRow = rows[0];
     if (tokenRow.revoked_at) {
+      await connection.rollback();
       return res.status(401).json({ error: 'Refresh token revoked' });
     }
     if (new Date(tokenRow.expires_at) <= new Date()) {
+      await connection.rollback();
       return res.status(401).json({ error: 'Refresh token expired' });
     }
 
-    await db.query('UPDATE admin_refresh_tokens SET revoked_at = NOW() WHERE id = ?', [tokenRow.id]);
+    await connection.query('UPDATE admin_refresh_tokens SET revoked_at = NOW() WHERE id = ?', [tokenRow.id]);
 
-    const [admins] = await db.query('SELECT id, email, role, is_active FROM admin_users WHERE id = ?', [tokenRow.admin_id]);
+    const [admins] = await connection.query(
+      'SELECT id, email, role, is_active FROM admin_users WHERE id = ? FOR UPDATE',
+      [tokenRow.admin_id]
+    );
     if (admins.length === 0 || !admins[0].is_active) {
+      await connection.rollback();
       return res.status(401).json({ error: 'Invalid admin' });
     }
 
-    const tokens = await issueAdminTokens(admins[0], req);
+    const tokens = await issueAdminTokens(admins[0], req, connection);
+    await connection.commit();
     return res.json({ message: 'Token refreshed', ...tokens });
   } catch (err) {
+    await connection.rollback();
     console.error('Admin refresh error:', err);
     return res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
   }
 };
 

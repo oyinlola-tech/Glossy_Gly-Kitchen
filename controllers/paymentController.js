@@ -261,6 +261,15 @@ exports.verify = async (req, res) => {
       await connection.rollback();
       return res.status(403).json({ error: 'Forbidden' });
     }
+    if (payment.status === 'success') {
+      await connection.commit();
+      return res.json({
+        message: 'Payment already verified',
+        reference,
+        status: 'success',
+        orderId: payment.order_id,
+      });
+    }
 
     const verifyData = await verifyTransaction(reference);
     const remoteStatus = String(verifyData.status || '').toLowerCase();

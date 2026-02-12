@@ -17,7 +17,15 @@ const verifyWebhookSignature = (rawBody, signature) => {
     .createHmac('sha512', process.env.PAYSTACK_WEBHOOK_SECRET)
     .update(rawBody, 'utf8')
     .digest('hex');
-  return hash === signature;
+  const expected = Buffer.from(hash, 'hex');
+  let provided;
+  try {
+    provided = Buffer.from(String(signature).trim(), 'hex');
+  } catch {
+    return false;
+  }
+  if (expected.length !== provided.length) return false;
+  return crypto.timingSafeEqual(expected, provided);
 };
 
 const initializeTransaction = async ({ email, amount, reference, callbackUrl, metadata }) => {

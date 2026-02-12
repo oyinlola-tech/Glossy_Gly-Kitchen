@@ -20,12 +20,12 @@ const issueAccessToken = (user) => {
   );
 };
 
-const issueRefreshToken = async (userId, req) => {
+const issueRefreshToken = async (userId, req, queryable = db) => {
   const token = createRefreshToken();
   const tokenHash = hashToken(token);
   const expiresAt = refreshExpiryDate();
 
-  await db.query(
+  await queryable.query(
     `INSERT INTO refresh_tokens
      (id, user_id, token_hash, expires_at, created_ip, user_agent, created_at)
      VALUES (?, ?, ?, ?, ?, ?, NOW())`,
@@ -42,9 +42,9 @@ const issueRefreshToken = async (userId, req) => {
   return token;
 };
 
-const issueTokens = async (user, req) => {
+const issueTokens = async (user, req, queryable = db) => {
   const accessToken = issueAccessToken(user);
-  const refreshToken = await issueRefreshToken(user.id, req);
+  const refreshToken = await issueRefreshToken(user.id, req, queryable);
   return { accessToken, refreshToken };
 };
 
@@ -326,46 +326,62 @@ exports.refresh = async (req, res) => {
     return res.status(400).json({ error: 'refreshToken is required' });
   }
 
+  const connection = await db.getConnection();
   try {
+    await connection.beginTransaction();
+
     const tokenHash = hashToken(refreshToken);
-    const [rows] = await db.query(
+    const [rows] = await connection.query(
       `SELECT id, user_id, expires_at, revoked_at
        FROM refresh_tokens
-       WHERE token_hash = ?`,
+       WHERE token_hash = ?
+       FOR UPDATE`,
       [tokenHash]
     );
 
     if (rows.length === 0) {
+      await connection.rollback();
       return res.status(401).json({ error: 'Invalid refresh token' });
     }
 
     const tokenRow = rows[0];
     if (tokenRow.revoked_at) {
+      await connection.rollback();
       return res.status(401).json({ error: 'Refresh token revoked' });
     }
     if (new Date(tokenRow.expires_at) <= new Date()) {
+      await connection.rollback();
       return res.status(401).json({ error: 'Refresh token expired' });
     }
 
     // Revoke old token
-    await db.query(
+    await connection.query(
       'UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = ?',
       [tokenRow.id]
     );
 
-    const [users] = await db.query('SELECT id, email, verified, is_suspended FROM users WHERE id = ?', [tokenRow.user_id]);
+    const [users] = await connection.query(
+      'SELECT id, email, verified, is_suspended FROM users WHERE id = ? FOR UPDATE',
+      [tokenRow.user_id]
+    );
     if (users.length === 0 || !users[0].verified) {
+      await connection.rollback();
       return res.status(401).json({ error: 'Invalid user' });
     }
     if (users[0].is_suspended) {
+      await connection.rollback();
       return res.status(403).json({ error: 'Account is suspended' });
     }
 
-    const tokens = await issueTokens(users[0], req);
+    const tokens = await issueTokens(users[0], req, connection);
+    await connection.commit();
     res.json({ message: 'Token refreshed', ...tokens });
   } catch (err) {
+    await connection.rollback();
     console.error('Refresh error:', err);
     res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
   }
 };
 
