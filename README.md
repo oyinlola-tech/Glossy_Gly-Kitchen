@@ -86,10 +86,10 @@ EMAIL_PASS=your_app_password
 EMAIL_FROM="Glossy_Gly-Kitchen <your_email@gmail.com>"
 
 # Paystack
-PAYSTACK_SECRET_KEY=your_paystack_secret_key_here
-PAYSTACK_PUBLIC_KEY=your_paystack_public_key_here
-PAYSTACK_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxxxxxxxxxxxxx
-PAYSTACK_BASE_URL=https://api.paystack.co
+PAYSTACK_SECRET_KEY= 
+PAYSTACK_PUBLIC_KEY=
+PAYSTACK_WEBHOOK_SECRET=
+PAYSTACK_BASE_URL=g
 ```
 
 4. Import the database schema:
