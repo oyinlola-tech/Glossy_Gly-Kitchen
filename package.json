@@ -1,0 +1,27 @@
+{
+  "name": "assignment-from-truemind",
+  "version": "1.0.0",
+  "description": "## Overview Chuks Kitchen is a Node.js + Express backend API that powers a food ordering system with menu browsing, cart management, and order processing. It uses MySQL (AMPPs) with `mysql2/promise`, OTP email verification via Nodemailer (Gmail SMTP), and UUIDs for identifiers. Authentication is handled via JWT access tokens issued after OTP verification.",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js"
+  },
+  "keywords": [],
+  "author": "Oluwayemi Oyinlola Michael",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.2.4",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mysql2": "^3.17.0",
+    "nodemailer": "^8.0.1",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}
