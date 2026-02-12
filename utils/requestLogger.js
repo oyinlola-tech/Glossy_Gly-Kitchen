@@ -13,6 +13,14 @@ const sanitizeLogField = (value, max = 512) => {
   return raw.replace(/[\r\n\t]/g, ' ').slice(0, max);
 };
 
+const redactSensitiveQueryParams = (url) => {
+  const raw = String(url || '');
+  return raw.replace(
+    /([?&](?:token|refreshToken|otp|password|authorizationCode)=)[^&]*/gi,
+    '$1[redacted]'
+  );
+};
+
 const requestId = (req, res, next) => {
   const incoming = sanitizeHeaderValue(req.get('x-request-id'), 64);
   const id = incoming || uuidv4();
@@ -46,7 +54,7 @@ const requestLogger = (req, res, next) => {
     const userId = req.user && req.user.id ? req.user.id : 'anonymous';
     const adminTag = req.admin && req.admin.keyId ? ` admin=${req.admin.keyId.slice(0, 8)}` : '';
     const safeMethod = sanitizeLogField(req.method, 16);
-    const safeUrl = sanitizeLogField(req.originalUrl, 300);
+    const safeUrl = sanitizeLogField(redactSensitiveQueryParams(req.originalUrl), 300);
     const safeUserId = sanitizeLogField(userId, 64);
     const safeIp = sanitizeLogField(req.ip, 64);
     const safeReqId = sanitizeLogField(req.requestId || 'n/a', 64);

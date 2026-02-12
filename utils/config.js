@@ -48,7 +48,6 @@ const validateConfig = () => {
   requireEnv('EMAIL_USER');
   requireEnv('EMAIL_PASS');
   requireEnv('EMAIL_FROM');
-  requireEnv('ADMIN_API_KEY');
   requireEnv('ADMIN_BOOTSTRAP_KEY');
   requireEnv('JWT_SECRET');
   requireEnv('JWT_EXPIRES_IN');
@@ -77,7 +76,6 @@ const validateConfig = () => {
     requireEnv('CORS_ORIGIN');
     requireMinLengthEnv('JWT_SECRET', 32);
     rejectValuesInProduction('JWT_SECRET', ['change_me']);
-    rejectValuesInProduction('ADMIN_API_KEY', ['change_me']);
     rejectValuesInProduction('ADMIN_BOOTSTRAP_KEY', ['change_me_bootstrap']);
     rejectValuesInProduction('DEFAULT_ADMIN_PASSWORD', ['ChangeThisStrongAdminPassword123!']);
   }

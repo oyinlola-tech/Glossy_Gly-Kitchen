@@ -489,6 +489,91 @@ exports.applyCouponToOrder = async (req, res) => {
   }
 };
 
+// -------------------- DELETE /orders/:id/coupon --------------------
+exports.removeCouponFromOrder = async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+
+  if (!isUuid(id)) {
+    return res.status(400).json({ error: 'Invalid order id' });
+  }
+  if (!isUuid(userId)) {
+    return res.status(400).json({ error: 'Valid userId is required' });
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [orders] = await connection.query(
+      `SELECT id, total_amount, status, coupon_id
+       FROM orders
+       WHERE id = ? AND user_id = ?
+       FOR UPDATE`,
+      [id, userId]
+    );
+    if (orders.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const order = orders[0];
+    if (order.status !== 'pending') {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Coupon can only be removed from pending orders' });
+    }
+    if (!order.coupon_id) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'No coupon applied on this order' });
+    }
+
+    const [redemptions] = await connection.query(
+      `SELECT id, coupon_id, status
+       FROM coupon_redemptions
+       WHERE order_id = ?
+       LIMIT 1
+       FOR UPDATE`,
+      [id]
+    );
+
+    if (redemptions.length > 0 && redemptions[0].status === 'reserved') {
+      await releaseCouponCount(connection, redemptions[0].coupon_id);
+      await connection.query(
+        `UPDATE coupon_redemptions
+         SET status = 'released', updated_at = NOW()
+         WHERE id = ?`,
+        [redemptions[0].id]
+      );
+    }
+
+    await connection.query(
+      `UPDATE orders
+       SET coupon_id = NULL,
+           coupon_code = NULL,
+           coupon_discount_type = NULL,
+           coupon_discount_value = NULL,
+           discount_amount = 0,
+           payable_amount = total_amount,
+           updated_at = NOW()
+       WHERE id = ?`,
+      [id]
+    );
+
+    await connection.commit();
+    return res.json({
+      message: 'Coupon removed successfully',
+      orderId: id,
+      payableAmount: Number(order.total_amount),
+    });
+  } catch (err) {
+    await connection.rollback();
+    console.error('Remove coupon error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
+  }
+};
+
 // -------------------- PATCH /orders/:id/status (Update order status) --------------------
 exports.updateOrderStatus = async (req, res) => {
   const { id } = req.params;

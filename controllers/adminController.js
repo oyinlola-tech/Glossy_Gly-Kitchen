@@ -15,6 +15,14 @@ const { isLocked, recordFailure, clearFailures } = require('../utils/otpGuard');
 const DUMMY_PASSWORD_HASH = '$2a$10$7EqJtq98hPqEX7fNZaFWoOaJY8fDeihh5Z8SGvtQvE4H14R/2uOe';
 const COUPON_CODE_REGEX = /^[A-Z0-9_-]{4,40}$/;
 const REFERRAL_CODE_REGEX = /^[A-Z0-9]{6,20}$/;
+const REFRESH_TOKEN_REGEX = /^[a-f0-9]{96}$/i;
+
+const normalizeRefreshToken = (value) => {
+  if (typeof value !== 'string') return null;
+  const token = value.trim();
+  if (!REFRESH_TOKEN_REGEX.test(token)) return null;
+  return token;
+};
 
 const parsePaging = (req) => {
   const page = Math.max(toInt(req.query.page) || 1, 1);
@@ -319,9 +327,9 @@ exports.login = async (req, res) => {
 };
 
 exports.refresh = async (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = normalizeRefreshToken(req.body && req.body.refreshToken);
   if (!refreshToken) {
-    return res.status(400).json({ error: 'refreshToken is required' });
+    return res.status(400).json({ error: 'Valid refreshToken is required' });
   }
 
   const connection = await db.getConnection();
@@ -376,17 +384,42 @@ exports.refresh = async (req, res) => {
 };
 
 exports.logout = async (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = normalizeRefreshToken(req.body && req.body.refreshToken);
+  const adminId = req.admin && req.admin.id;
+  if (!adminId || !isUuid(adminId)) {
+    return res.status(401).json({ error: 'Admin authorization token required' });
+  }
   if (!refreshToken) {
-    return res.status(400).json({ error: 'refreshToken is required' });
+    return res.status(400).json({ error: 'Valid refreshToken is required' });
   }
 
   try {
     const tokenHash = hashToken(refreshToken);
-    await db.query('UPDATE admin_refresh_tokens SET revoked_at = NOW() WHERE token_hash = ?', [tokenHash]);
+    await db.query(
+      'UPDATE admin_refresh_tokens SET revoked_at = NOW() WHERE token_hash = ? AND admin_id = ?',
+      [tokenHash, adminId]
+    );
     return res.json({ message: 'Logged out' });
   } catch (err) {
     console.error('Admin logout error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+exports.logoutAll = async (req, res) => {
+  const adminId = req.admin && req.admin.id;
+  if (!adminId || !isUuid(adminId)) {
+    return res.status(401).json({ error: 'Admin authorization token required' });
+  }
+
+  try {
+    await db.query(
+      'UPDATE admin_refresh_tokens SET revoked_at = NOW() WHERE admin_id = ? AND revoked_at IS NULL',
+      [adminId]
+    );
+    return res.json({ message: 'All admin sessions logged out' });
+  } catch (err) {
+    console.error('Admin logout all error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };

@@ -8,8 +8,35 @@ const { validatePassword, hashPassword, comparePassword } = require('../utils/pa
 const { createRefreshToken, hashToken, refreshExpiryDate } = require('../utils/tokens');
 const { sendMail } = require('../utils/mailer');
 const { isLocked, recordFailure, clearFailures } = require('../utils/otpGuard');
+const {
+  buildSignupVerificationEmail,
+  buildLoginOtpEmail,
+  buildPasswordResetOtpEmail,
+  buildPasswordChangedEmail,
+  buildNewDeviceLoginAlertEmail,
+} = require('../utils/emailTemplates');
 
 const DUMMY_PASSWORD_HASH = '$2a$10$7EqJtq98hPqEX7fNZaFWoOaJY8fDeihh5Z8SGvtQvE4H14R/2uOe';
+const REFRESH_TOKEN_REGEX = /^[a-f0-9]{96}$/i;
+const PASSWORD_RESET_SESSION_MINUTES = Number(process.env.PASSWORD_RESET_SESSION_MINUTES) > 0
+  ? Number(process.env.PASSWORD_RESET_SESSION_MINUTES)
+  : 15;
+
+const isMissingTableError = (err) => {
+  return Boolean(err && (err.code === 'ER_NO_SUCH_TABLE' || err.errno === 1146));
+};
+
+const normalizeRefreshToken = (value) => {
+  if (typeof value !== 'string') return null;
+  const token = value.trim();
+  if (!REFRESH_TOKEN_REGEX.test(token)) return null;
+  return token;
+};
+
+const getDeviceFingerprint = (req, bodyDeviceId) => {
+  const source = req.get('x-device-id') || bodyDeviceId || req.get('user-agent') || 'unknown-device';
+  return hashToken(String(source).slice(0, 512));
+};
 
 const issueAccessToken = (user) => {
   const secret = process.env.JWT_SECRET;
@@ -17,7 +44,7 @@ const issueAccessToken = (user) => {
     throw new Error('JWT secret not configured');
   }
   return jwt.sign(
-    { sub: user.id, email: user.email || null },
+    { sub: user.id, email: user.email || null, typ: 'access' },
     secret,
     { expiresIn: process.env.JWT_EXPIRES_IN, issuer: process.env.JWT_ISSUER }
   );
@@ -53,23 +80,95 @@ const issueTokens = async (user, req, queryable = db) => {
 
 // -------------------- Helper: Send OTP Email --------------------
 const sendOtpEmail = async (email, otp) => {
-  await sendMail({
-    to: email,
-    subject: 'Glossy_Gly-Kitchen - Verify Your Account',
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #ff6b35;">Welcome to Glossy_Gly-Kitchen!</h2>
-        <p>Your OTP for account verification is:</p>
-        <div style="background: #f5f5f5; padding: 15px; font-size: 24px; font-weight: bold; text-align: center; letter-spacing: 5px;">
-          ${otp}
-        </div>
-        <p>This code will expire in 10 minutes.</p>
-        <p>If you didn't request this, please ignore this email.</p>
-        <br>
-        <p>Cheers,<br>Glossy_Gly-Kitchen Team</p>
-      </div>
-    `,
+  const template = buildSignupVerificationEmail({ otp });
+  await sendMail({ to: email, subject: template.subject, html: template.html, text: template.text });
+};
+
+const sendLoginOtpEmail = async (email, otp) => {
+  const template = buildLoginOtpEmail({ otp });
+  await sendMail({ to: email, subject: template.subject, html: template.html, text: template.text });
+};
+
+const sendPasswordResetOtpEmail = async (email, otp) => {
+  const template = buildPasswordResetOtpEmail({ otp });
+  await sendMail({ to: email, subject: template.subject, html: template.html, text: template.text });
+};
+
+const sendPasswordChangedEmail = async ({ email, req }) => {
+  if (!email) return;
+  const template = buildPasswordChangedEmail({
+    ip: req.ip,
+    userAgent: req.get('user-agent') || null,
+    changedAt: new Date().toISOString(),
   });
+  await sendMail({ to: email, subject: template.subject, html: template.html, text: template.text });
+};
+
+const sendNewDeviceLoginAlert = async ({ email, req }) => {
+  if (!email) return;
+  const template = buildNewDeviceLoginAlertEmail({
+    ip: req.ip,
+    userAgent: req.get('user-agent') || null,
+    loginAt: new Date().toISOString(),
+  });
+  await sendMail({ to: email, subject: template.subject, html: template.html, text: template.text });
+};
+
+const registerUserDeviceLogin = async ({ user, req, deviceId }) => {
+  if (!user || !user.id) return { isNewDeviceOrIp: false };
+
+  try {
+    const deviceHash = getDeviceFingerprint(req, deviceId);
+    const [rows] = await db.query(
+      'SELECT id, last_ip FROM user_trusted_devices WHERE user_id = ? AND device_hash = ? LIMIT 1',
+      [user.id, deviceHash]
+    );
+
+    const isNewDevice = rows.length === 0;
+    const isIpChanged = rows.length > 0 && rows[0].last_ip && rows[0].last_ip !== req.ip;
+    const isNewDeviceOrIp = isNewDevice || isIpChanged;
+
+    await db.query(
+      `INSERT INTO user_trusted_devices
+       (id, user_id, device_hash, last_ip, last_user_agent, last_seen_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, NOW(), NOW(), NOW())
+       ON DUPLICATE KEY UPDATE
+         last_ip = VALUES(last_ip),
+         last_user_agent = VALUES(last_user_agent),
+         last_seen_at = NOW(),
+         updated_at = NOW()`,
+      [
+        uuidv4(),
+        user.id,
+        deviceHash,
+        req.ip,
+        req.get('user-agent') || null,
+      ]
+    );
+
+    return { isNewDeviceOrIp };
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      console.warn('user_trusted_devices table not found. Skipping new-device detection.');
+      return { isNewDeviceOrIp: false };
+    }
+    throw err;
+  }
+};
+
+const createPasswordResetSession = async (connection, userId) => {
+  const token = createRefreshToken();
+  const tokenHash = hashToken(token);
+  const expiresAt = new Date(Date.now() + PASSWORD_RESET_SESSION_MINUTES * 60 * 1000);
+
+  await connection.query(
+    `INSERT INTO user_password_reset_sessions
+     (id, user_id, token_hash, expires_at, consumed_at, created_at)
+     VALUES (?, ?, ?, ?, NULL, NOW())`,
+    [uuidv4(), userId, tokenHash, expiresAt]
+  );
+
+  return { token, expiresAt };
 };
 
 // -------------------- POST /signup --------------------
@@ -158,18 +257,20 @@ exports.signup = async (req, res) => {
 // -------------------- POST /verify --------------------
 exports.verify = async (req, res) => {
   const { userId, otp } = req.body;
+  const userIdValue = typeof userId === 'string' ? userId.trim() : '';
+  const otpValue = typeof otp === 'string' ? otp.trim() : '';
 
-  if (!userId || !otp) {
+  if (!userIdValue || !otpValue) {
     return res.status(400).json({ error: 'userId and otp are required' });
   }
-  if (!isUuid(String(userId).trim())) {
+  if (!isUuid(userIdValue)) {
     return res.status(400).json({ error: 'Invalid userId' });
   }
-  if (!/^\d{6}$/.test(String(otp).trim())) {
+  if (!/^\d{6}$/.test(otpValue)) {
     return res.status(400).json({ error: 'Invalid or expired OTP' });
   }
 
-  const lockState = isLocked('verify', userId);
+  const lockState = isLocked('verify', userIdValue);
   if (lockState.locked) {
     res.setHeader('Retry-After', String(lockState.retryAfterSec));
     return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
@@ -180,11 +281,11 @@ exports.verify = async (req, res) => {
     const [users] = await db.query(
       `SELECT id, email FROM users 
        WHERE id = ? AND verified = 0 AND otp_code = ? AND otp_expires > NOW()`,
-      [userId, otp]
+      [userIdValue, otpValue]
     );
 
     if (users.length === 0) {
-      const afterFailure = recordFailure('verify', userId);
+      const afterFailure = recordFailure('verify', userIdValue);
       if (afterFailure.locked) {
         res.setHeader('Retry-After', String(afterFailure.retryAfterSec));
         return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
@@ -196,11 +297,11 @@ exports.verify = async (req, res) => {
     await db.query(
       `UPDATE users SET verified = 1, otp_code = NULL, otp_expires = NULL, updated_at = NOW()
        WHERE id = ?`,
-      [userId]
+      [userIdValue]
     );
 
-    clearFailures('verify', userId);
-    const tokens = await issueTokens({ id: userId, email: users[0].email }, req);
+    clearFailures('verify', userIdValue);
+    const tokens = await issueTokens({ id: userIdValue, email: users[0].email }, req);
     res.json({ message: 'Account verified successfully.', ...tokens });
 
   } catch (err) {
@@ -253,7 +354,7 @@ exports.resendOtp = async (req, res) => {
 // -------------------- POST /login --------------------
 exports.login = async (req, res) => {
   const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
-  const { password } = req.body;
+  const { password, deviceId } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ error: 'email and password are required' });
@@ -283,6 +384,13 @@ exports.login = async (req, res) => {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
 
+    const deviceState = await registerUserDeviceLogin({ user, req, deviceId });
+    if (deviceState.isNewDeviceOrIp) {
+      sendNewDeviceLoginAlert({ email: user.email, req }).catch((err) => {
+        console.error('New device login email failed:', err.message);
+      });
+    }
+
     const tokens = await issueTokens(user, req);
     res.json({ message: 'Login successful', ...tokens });
   } catch (err) {
@@ -291,10 +399,99 @@ exports.login = async (req, res) => {
   }
 };
 
-// -------------------- POST /login-otp --------------------
-exports.loginOtp = async (req, res) => {
+// -------------------- POST /request-login-otp --------------------
+exports.requestLoginOtp = async (req, res) => {
   const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
-  const { otp } = req.body;
+  const genericMessage = 'If an active account exists, OTP has been sent';
+
+  if (!email) {
+    return res.status(400).json({ error: 'email is required' });
+  }
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'Invalid email address' });
+  }
+
+  try {
+    const [users] = await db.query(
+      `SELECT id, email, verified, is_suspended
+       FROM users WHERE email = ?`,
+      [email]
+    );
+
+    if (users.length === 0 || !users[0].verified || users[0].is_suspended) {
+      return res.json({ message: genericMessage });
+    }
+
+    const user = users[0];
+    const otp = generateOtp();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+
+    await db.query(
+      'UPDATE users SET otp_code = ?, otp_expires = ?, updated_at = NOW() WHERE id = ?',
+      [otp, otpExpires, user.id]
+    );
+    await sendLoginOtpEmail(user.email, otp);
+
+    return res.json({ message: genericMessage });
+  } catch (err) {
+    console.error('Request login OTP error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// -------------------- POST /forgot-password/request --------------------
+exports.requestPasswordResetOtp = async (req, res) => {
+  const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const genericMessage = 'If an active account exists, password reset OTP has been sent';
+
+  if (!email) {
+    return res.status(400).json({ error: 'email is required' });
+  }
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'Invalid email address' });
+  }
+
+  try {
+    const [users] = await db.query(
+      'SELECT id, email, verified, is_suspended FROM users WHERE email = ?',
+      [email]
+    );
+    if (users.length === 0 || !users[0].verified || users[0].is_suspended) {
+      return res.json({ message: genericMessage });
+    }
+
+    const user = users[0];
+    const otp = generateOtp();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+
+    await db.query(
+      `UPDATE user_password_reset_otps
+       SET consumed_at = NOW()
+       WHERE user_id = ? AND consumed_at IS NULL`,
+      [user.id]
+    );
+    await db.query(
+      `INSERT INTO user_password_reset_otps (id, user_id, otp_code, otp_expires, consumed_at, created_at)
+       VALUES (?, ?, ?, ?, NULL, NOW())`,
+      [uuidv4(), user.id, otp, otpExpires]
+    );
+
+    await sendPasswordResetOtpEmail(user.email, otp);
+    return res.json({ message: genericMessage });
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      return res.status(503).json({ error: 'Password reset service unavailable. Apply latest migrations.' });
+    }
+    console.error('Request password reset OTP error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// -------------------- POST /forgot-password/verify --------------------
+exports.verifyPasswordResetOtp = async (req, res) => {
+  const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const otp = typeof req.body.otp === 'string' ? req.body.otp.trim() : '';
+  const lockIdentity = `forgot-password:${email}`;
 
   if (!email || !otp) {
     return res.status(400).json({ error: 'email and otp are required' });
@@ -302,7 +499,191 @@ exports.loginOtp = async (req, res) => {
   if (!isValidEmail(email)) {
     return res.status(400).json({ error: 'Invalid email address' });
   }
-  if (!/^\d{6}$/.test(String(otp).trim())) {
+  if (!/^\d{6}$/.test(otp)) {
+    return res.status(400).json({ error: 'Invalid or expired OTP' });
+  }
+
+  const lockState = isLocked('forgot-password', lockIdentity);
+  if (lockState.locked) {
+    res.setHeader('Retry-After', String(lockState.retryAfterSec));
+    return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [users] = await connection.query(
+      `SELECT id, email, verified, is_suspended
+       FROM users
+       WHERE email = ?
+       FOR UPDATE`,
+      [email]
+    );
+    if (users.length === 0 || !users[0].verified || users[0].is_suspended) {
+      await connection.rollback();
+      const fail = recordFailure('forgot-password', lockIdentity);
+      if (fail.locked) {
+        res.setHeader('Retry-After', String(fail.retryAfterSec));
+        return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+      }
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    }
+
+    const user = users[0];
+    const [otpRows] = await connection.query(
+      `SELECT id, otp_code, otp_expires
+       FROM user_password_reset_otps
+       WHERE user_id = ? AND consumed_at IS NULL
+       ORDER BY created_at DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [user.id]
+    );
+
+    if (
+      otpRows.length === 0 ||
+      otpRows[0].otp_code !== otp ||
+      !otpRows[0].otp_expires ||
+      new Date(otpRows[0].otp_expires) <= new Date()
+    ) {
+      await connection.rollback();
+      const fail = recordFailure('forgot-password', lockIdentity);
+      if (fail.locked) {
+        res.setHeader('Retry-After', String(fail.retryAfterSec));
+        return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+      }
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    }
+
+    await connection.query(
+      'UPDATE user_password_reset_otps SET consumed_at = NOW() WHERE id = ?',
+      [otpRows[0].id]
+    );
+
+    await connection.query(
+      'UPDATE user_password_reset_sessions SET consumed_at = NOW() WHERE user_id = ? AND consumed_at IS NULL',
+      [user.id]
+    );
+    const session = await createPasswordResetSession(connection, user.id);
+
+    await connection.commit();
+    clearFailures('forgot-password', lockIdentity);
+
+    return res.json({
+      message: 'OTP verified successfully',
+      resetToken: session.token,
+      expiresInSeconds: PASSWORD_RESET_SESSION_MINUTES * 60,
+    });
+  } catch (err) {
+    await connection.rollback();
+    if (isMissingTableError(err)) {
+      return res.status(503).json({ error: 'Password reset service unavailable. Apply latest migrations.' });
+    }
+    console.error('Verify password reset OTP error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
+  }
+};
+
+// -------------------- POST /forgot-password/reset --------------------
+exports.resetPasswordWithToken = async (req, res) => {
+  const resetToken = normalizeRefreshToken(req.body && req.body.resetToken);
+  const newPassword = req.body && req.body.newPassword;
+
+  if (!resetToken) {
+    return res.status(400).json({ error: 'Valid resetToken is required' });
+  }
+  const passwordError = validatePassword(newPassword);
+  if (passwordError) {
+    return res.status(400).json({ error: passwordError });
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const tokenHash = hashToken(resetToken);
+    const [sessions] = await connection.query(
+      `SELECT id, user_id, expires_at, consumed_at
+       FROM user_password_reset_sessions
+       WHERE token_hash = ?
+       FOR UPDATE`,
+      [tokenHash]
+    );
+    if (sessions.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
+    const session = sessions[0];
+    if (session.consumed_at || !session.expires_at || new Date(session.expires_at) <= new Date()) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
+    const [users] = await connection.query(
+      'SELECT id, email, password_hash FROM users WHERE id = ? FOR UPDATE',
+      [session.user_id]
+    );
+    if (users.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
+    const user = users[0];
+    const samePassword = await comparePassword(newPassword, user.password_hash || DUMMY_PASSWORD_HASH);
+    if (samePassword) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'New password must be different from current password' });
+    }
+
+    const newPasswordHash = await hashPassword(newPassword);
+    await connection.query(
+      'UPDATE users SET password_hash = ?, updated_at = NOW() WHERE id = ?',
+      [newPasswordHash, user.id]
+    );
+    await connection.query(
+      'UPDATE user_password_reset_sessions SET consumed_at = NOW() WHERE id = ?',
+      [session.id]
+    );
+    await connection.query(
+      'UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL',
+      [user.id]
+    );
+
+    await connection.commit();
+    sendPasswordChangedEmail({ email: user.email, req }).catch((err) => {
+      console.error('Password reset success email failed:', err.message);
+    });
+
+    return res.json({ message: 'Password reset successful. Please login again.' });
+  } catch (err) {
+    await connection.rollback();
+    if (isMissingTableError(err)) {
+      return res.status(503).json({ error: 'Password reset service unavailable. Apply latest migrations.' });
+    }
+    console.error('Reset password with token error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
+  }
+};
+
+// -------------------- POST /login-otp --------------------
+exports.loginOtp = async (req, res) => {
+  const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const otpValue = typeof req.body.otp === 'string' ? req.body.otp.trim() : '';
+  const deviceId = req.body && req.body.deviceId;
+
+  if (!email || !otpValue) {
+    return res.status(400).json({ error: 'email and otp are required' });
+  }
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'Invalid email address' });
+  }
+  if (!/^\d{6}$/.test(otpValue)) {
     return res.status(400).json({ error: 'Invalid or expired OTP' });
   }
 
@@ -339,7 +720,7 @@ exports.loginOtp = async (req, res) => {
       return res.status(400).json({ error: 'Invalid or expired OTP' });
     }
 
-    if (!user.otp_code || user.otp_code !== otp || !user.otp_expires || user.otp_expires <= new Date()) {
+    if (!user.otp_code || user.otp_code !== otpValue || !user.otp_expires || user.otp_expires <= new Date()) {
       const afterFailure = recordFailure('login-otp', identity);
       if (afterFailure.locked) {
         res.setHeader('Retry-After', String(afterFailure.retryAfterSec));
@@ -354,6 +735,13 @@ exports.loginOtp = async (req, res) => {
     );
 
     clearFailures('login-otp', identity);
+    const deviceState = await registerUserDeviceLogin({ user, req, deviceId });
+    if (deviceState.isNewDeviceOrIp) {
+      sendNewDeviceLoginAlert({ email: user.email, req }).catch((err) => {
+        console.error('New device login email failed:', err.message);
+      });
+    }
+
     const tokens = await issueTokens(user, req);
     res.json({ message: 'Login successful', ...tokens });
   } catch (err) {
@@ -364,9 +752,9 @@ exports.loginOtp = async (req, res) => {
 
 // -------------------- POST /refresh --------------------
 exports.refresh = async (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = normalizeRefreshToken(req.body && req.body.refreshToken);
   if (!refreshToken) {
-    return res.status(400).json({ error: 'refreshToken is required' });
+    return res.status(400).json({ error: 'Valid refreshToken is required' });
   }
 
   const connection = await db.getConnection();
@@ -430,18 +818,44 @@ exports.refresh = async (req, res) => {
 
 // -------------------- POST /logout --------------------
 exports.logout = async (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = normalizeRefreshToken(req.body && req.body.refreshToken);
+  const userId = req.user && req.user.id;
+  if (!userId || !isUuid(userId)) {
+    return res.status(401).json({ error: 'Authorization token required' });
+  }
   if (!refreshToken) {
-    return res.status(400).json({ error: 'refreshToken is required' });
+    return res.status(400).json({ error: 'Valid refreshToken is required' });
   }
 
   try {
     const tokenHash = hashToken(refreshToken);
-    await db.query('UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = ?', [tokenHash]);
-    res.json({ message: 'Logged out' });
+    await db.query(
+      'UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = ? AND user_id = ?',
+      [tokenHash, userId]
+    );
+    return res.json({ message: 'Logged out' });
   } catch (err) {
     console.error('Logout error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// -------------------- POST /logout-all --------------------
+exports.logoutAll = async (req, res) => {
+  const userId = req.user && req.user.id;
+  if (!userId || !isUuid(userId)) {
+    return res.status(401).json({ error: 'Authorization token required' });
+  }
+
+  try {
+    await db.query(
+      'UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL',
+      [userId]
+    );
+    return res.json({ message: 'All sessions logged out' });
+  } catch (err) {
+    console.error('Logout all error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -518,8 +932,10 @@ exports.updateMe = async (req, res) => {
     }
 
     const user = users[0];
+    const userEmail = user.email;
     const fields = [];
     const values = [];
+    let passwordChanged = false;
 
     if (wantsPhoneUpdate) {
       const normalizedPhone = phone === null || phone === '' ? null : String(phone).trim();
@@ -538,7 +954,7 @@ exports.updateMe = async (req, res) => {
     }
 
     if (wantsPasswordUpdate) {
-      const ok = await comparePassword(currentPassword, user.password_hash || '');
+      const ok = await comparePassword(currentPassword, user.password_hash || DUMMY_PASSWORD_HASH);
       if (!ok) {
         await connection.rollback();
         return res.status(400).json({ error: 'Current password is incorrect' });
@@ -547,6 +963,7 @@ exports.updateMe = async (req, res) => {
       const newPasswordHash = await hashPassword(newPassword);
       fields.push('password_hash = ?');
       values.push(newPasswordHash);
+      passwordChanged = true;
     }
 
     fields.push('updated_at = NOW()');
@@ -562,6 +979,13 @@ exports.updateMe = async (req, res) => {
     );
 
     await connection.commit();
+
+    if (passwordChanged) {
+      sendPasswordChangedEmail({ email: userEmail, req }).catch((err) => {
+        console.error('Password changed email failed:', err.message);
+      });
+    }
+
     return res.json({
       message: 'Profile updated successfully',
       user: updatedUsers[0],

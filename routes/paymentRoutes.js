@@ -15,6 +15,7 @@ router.post('/initialize', paymentLimiter, requireAuth, requireVerifiedUser, pay
 router.get('/verify/:reference', paymentLimiter, requireAuth, requireVerifiedUser, paymentController.verify);
 router.post('/cards', paymentLimiter, requireAuth, requireVerifiedUser, paymentController.attachCard);
 router.get('/cards', paymentLimiter, requireAuth, requireVerifiedUser, paymentController.listCards);
+router.patch('/cards/:cardId/default', paymentLimiter, requireAuth, requireVerifiedUser, paymentController.setDefaultCard);
 router.delete('/cards/:cardId', paymentLimiter, requireAuth, requireVerifiedUser, paymentController.deleteCard);
 router.post('/pay-with-saved-card', paymentLimiter, requireAuth, requireVerifiedUser, paymentController.payWithSavedCard);
 router.post('/webhook/paystack', paymentController.paystackWebhook);

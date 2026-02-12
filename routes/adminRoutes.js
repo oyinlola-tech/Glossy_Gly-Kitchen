@@ -14,7 +14,8 @@ const adminAuthLimiter = rateLimit({
 router.post('/auth/bootstrap', adminAuthLimiter, adminController.bootstrap);
 router.post('/auth/login', adminAuthLimiter, adminController.login);
 router.post('/auth/refresh', adminAuthLimiter, adminController.refresh);
-router.post('/auth/logout', adminAuthLimiter, adminController.logout);
+router.post('/auth/logout', adminAuthLimiter, requireAdminAuth, adminController.logout);
+router.post('/auth/logout-all', adminAuthLimiter, requireAdminAuth, adminController.logoutAll);
 router.get('/me', requireAdminAuth, adminController.me);
 
 router.get('/dashboard', requireAdminAuth, auditAdminAction('admin.dashboard.view'), adminController.dashboard);

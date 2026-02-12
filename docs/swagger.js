@@ -7,7 +7,7 @@ const options = {
     openapi: '3.0.3',
     info: {
       title: 'Glossy_Gly-Kitchen API',
-      version: '1.2.0',
+      version: '1.3.0',
       description: 'Production-ready food ordering backend API with auth, admin, foods, cart, orders, and disputes.',
     },
     servers: [
@@ -35,11 +35,6 @@ const options = {
           type: 'http',
           scheme: 'bearer',
           bearerFormat: 'JWT',
-        },
-        AdminApiKey: {
-          type: 'apiKey',
-          in: 'header',
-          name: 'x-admin-key',
         },
         AdminBootstrapKey: {
           type: 'apiKey',
@@ -84,6 +79,7 @@ const options = {
           properties: {
             email: { type: 'string', format: 'email' },
             password: { type: 'string' },
+            deviceId: { type: 'string' },
           },
         },
         LoginOtpRequest: {
@@ -99,6 +95,29 @@ const options = {
           required: ['refreshToken'],
           properties: {
             refreshToken: { type: 'string' },
+          },
+        },
+        RequestLoginOtpRequest: {
+          type: 'object',
+          required: ['email'],
+          properties: {
+            email: { type: 'string', format: 'email' },
+          },
+        },
+        ForgotPasswordVerifyRequest: {
+          type: 'object',
+          required: ['email', 'otp'],
+          properties: {
+            email: { type: 'string', format: 'email' },
+            otp: { type: 'string' },
+          },
+        },
+        ForgotPasswordResetRequest: {
+          type: 'object',
+          required: ['resetToken', 'newPassword'],
+          properties: {
+            resetToken: { type: 'string' },
+            newPassword: { type: 'string', minLength: 8 },
           },
         },
         ResendOtpRequest: {
@@ -415,6 +434,24 @@ const options = {
           },
         },
       },
+      '/auth/request-login-otp': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Request OTP for login',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/RequestLoginOtpRequest' },
+              },
+            },
+          },
+          responses: {
+            '200': { description: 'OTP request accepted' },
+            '400': { description: 'Validation error' },
+          },
+        },
+      },
       '/auth/login-otp': {
         post: {
           tags: ['Auth'],
@@ -436,6 +473,64 @@ const options = {
                 },
               },
             },
+          },
+        },
+      },
+      '/auth/forgot-password/request': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Request password reset OTP',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/RequestLoginOtpRequest' },
+              },
+            },
+          },
+          responses: {
+            '200': { description: 'Password reset OTP request accepted' },
+            '400': { description: 'Validation error' },
+            '503': { description: 'Password reset service unavailable (migration missing)' },
+          },
+        },
+      },
+      '/auth/forgot-password/verify': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Verify password reset OTP and issue short-lived reset token',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ForgotPasswordVerifyRequest' },
+              },
+            },
+          },
+          responses: {
+            '200': { description: 'OTP verified' },
+            '400': { description: 'Invalid or expired OTP' },
+            '429': { description: 'Too many invalid OTP attempts' },
+            '503': { description: 'Password reset service unavailable (migration missing)' },
+          },
+        },
+      },
+      '/auth/forgot-password/reset': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Reset password using reset token',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ForgotPasswordResetRequest' },
+              },
+            },
+          },
+          responses: {
+            '200': { description: 'Password reset successful' },
+            '400': { description: 'Invalid token or payload' },
+            '503': { description: 'Password reset service unavailable (migration missing)' },
           },
         },
       },
@@ -468,6 +563,7 @@ const options = {
         post: {
           tags: ['Auth'],
           summary: 'Revoke refresh token',
+          security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
             content: {
@@ -485,6 +581,28 @@ const options = {
                 },
               },
             },
+          },
+        },
+      },
+      '/auth/logout-all': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Revoke all refresh tokens for current user',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': { description: 'All sessions logged out' },
+            '401': { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/auth/referral-code/generate': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Generate a new referral code for current user',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '201': { description: 'Referral code generated' },
+            '401': { description: 'Unauthorized' },
           },
         },
       },
@@ -545,7 +663,7 @@ const options = {
         post: {
           tags: ['Foods'],
           summary: 'Create food item (Admin)',
-          security: [{ AdminApiKey: [] }],
+          security: [{ adminBearerAuth: [] }],
           requestBody: {
             required: true,
             content: {
@@ -594,7 +712,7 @@ const options = {
         put: {
           tags: ['Foods'],
           summary: 'Update food item (Admin)',
-          security: [{ AdminApiKey: [] }],
+          security: [{ adminBearerAuth: [] }],
           parameters: [
             {
               name: 'id',
@@ -627,7 +745,7 @@ const options = {
         delete: {
           tags: ['Foods'],
           summary: 'Soft delete food item (Admin)',
-          security: [{ AdminApiKey: [] }],
+          security: [{ adminBearerAuth: [] }],
           parameters: [
             {
               name: 'id',
@@ -785,11 +903,99 @@ const options = {
           },
         },
       },
+      '/orders/{id}/coupon/validate': {
+        post: {
+          tags: ['Orders'],
+          summary: 'Validate coupon for pending order',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              schema: { type: 'string', format: 'uuid' },
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['couponCode'],
+                  properties: {
+                    couponCode: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '200': { description: 'Coupon validation result' },
+            '400': { description: 'Validation error' },
+            '404': { description: 'Order or coupon not found' },
+          },
+        },
+      },
+      '/orders/{id}/coupon/apply': {
+        post: {
+          tags: ['Orders'],
+          summary: 'Apply coupon to pending order',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              schema: { type: 'string', format: 'uuid' },
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['couponCode'],
+                  properties: {
+                    couponCode: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '200': { description: 'Coupon applied' },
+            '400': { description: 'Validation error' },
+            '404': { description: 'Order or coupon not found' },
+          },
+        },
+      },
+      '/orders/{id}/coupon': {
+        delete: {
+          tags: ['Orders'],
+          summary: 'Remove coupon from pending order',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              schema: { type: 'string', format: 'uuid' },
+            },
+          ],
+          responses: {
+            '200': { description: 'Coupon removed' },
+            '400': { description: 'Validation error' },
+            '404': { description: 'Order not found' },
+          },
+        },
+      },
       '/orders/{id}/status': {
         patch: {
           tags: ['Orders'],
           summary: 'Update order status (Admin)',
-          security: [{ AdminApiKey: [] }],
+          security: [{ adminBearerAuth: [] }],
           parameters: [
             {
               name: 'id',
@@ -925,6 +1131,23 @@ const options = {
         },
       },
       '/payments/cards/{cardId}': {
+        patch: {
+          tags: ['Payments'],
+          summary: 'Set default saved card',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: 'cardId',
+              in: 'path',
+              required: true,
+              schema: { type: 'string', format: 'uuid' },
+            },
+          ],
+          responses: {
+            '200': { description: 'Default card updated' },
+            '404': { description: 'Card not found' },
+          },
+        },
         delete: {
           tags: ['Payments'],
           summary: 'Delete a saved card',
@@ -1060,6 +1283,7 @@ const options = {
         post: {
           tags: ['Admin'],
           summary: 'Logout admin',
+          security: [{ adminBearerAuth: [] }],
           requestBody: {
             required: true,
             content: {
@@ -1070,6 +1294,17 @@ const options = {
           },
           responses: {
             '200': { description: 'Logged out' },
+          },
+        },
+      },
+      '/admin/auth/logout-all': {
+        post: {
+          tags: ['Admin'],
+          summary: 'Logout admin from all sessions',
+          security: [{ adminBearerAuth: [] }],
+          responses: {
+            '200': { description: 'All admin sessions logged out' },
+            '401': { description: 'Unauthorized' },
           },
         },
       },
@@ -1219,6 +1454,80 @@ const options = {
           },
           responses: {
             '200': { description: 'Updated' },
+          },
+        },
+      },
+      '/admin/coupons': {
+        post: {
+          tags: ['Admin'],
+          summary: 'Create coupon',
+          security: [{ adminBearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['discountType', 'discountValue'],
+                  properties: {
+                    code: { type: 'string' },
+                    description: { type: 'string' },
+                    discountType: { type: 'string', enum: ['percentage', 'fixed'] },
+                    discountValue: { type: 'number' },
+                    maxRedemptions: { type: 'integer', nullable: true },
+                    startsAt: { type: 'string', format: 'date-time', nullable: true },
+                    expiresAt: { type: 'string', format: 'date-time', nullable: true },
+                    isActive: { type: 'boolean' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '201': { description: 'Created' },
+            '400': { description: 'Validation error' },
+          },
+        },
+        get: {
+          tags: ['Admin'],
+          summary: 'List coupons',
+          security: [{ adminBearerAuth: [] }],
+          responses: {
+            '200': { description: 'OK' },
+          },
+        },
+      },
+      '/admin/referral-codes': {
+        post: {
+          tags: ['Admin'],
+          summary: 'Create user referral code',
+          security: [{ adminBearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['userId'],
+                  properties: {
+                    userId: { type: 'string', format: 'uuid' },
+                    referralCode: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '201': { description: 'Created' },
+            '404': { description: 'User not found' },
+          },
+        },
+        get: {
+          tags: ['Admin'],
+          summary: 'List user referral codes',
+          security: [{ adminBearerAuth: [] }],
+          responses: {
+            '200': { description: 'OK' },
           },
         },
       },

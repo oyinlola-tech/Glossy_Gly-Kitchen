@@ -24,6 +24,7 @@ const requireAdminAuth = async (req, res, next) => {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET, {
       issuer: adminIssuer(),
+      algorithms: ['HS256'],
     });
 
     if (!payload || payload.typ !== 'admin' || !payload.sub || !isUuid(payload.sub)) {

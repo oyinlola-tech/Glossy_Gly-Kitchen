@@ -19,8 +19,12 @@ const requireAuth = async (req, res, next) => {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET, {
       issuer: process.env.JWT_ISSUER,
+      algorithms: ['HS256'],
     });
     if (!payload || !payload.sub || !isUuid(payload.sub)) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    if (payload.typ && payload.typ !== 'access') {
       return res.status(401).json({ error: 'Invalid token' });
     }
 

@@ -469,6 +469,48 @@ exports.listCards = async (req, res) => {
   }
 };
 
+exports.setDefaultCard = async (req, res) => {
+  const userId = req.user.id;
+  const { cardId } = req.params;
+  if (!isUuid(cardId)) {
+    return res.status(400).json({ error: 'Invalid cardId' });
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [cards] = await connection.query(
+      `SELECT id
+       FROM user_payment_cards
+       WHERE id = ? AND user_id = ?
+       FOR UPDATE`,
+      [cardId, userId]
+    );
+    if (cards.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Card not found' });
+    }
+
+    await connection.query(
+      'UPDATE user_payment_cards SET is_default = 0, updated_at = NOW() WHERE user_id = ?',
+      [userId]
+    );
+    await connection.query(
+      'UPDATE user_payment_cards SET is_default = 1, updated_at = NOW() WHERE id = ? AND user_id = ?',
+      [cardId, userId]
+    );
+
+    await connection.commit();
+    return res.json({ message: 'Default card updated successfully' });
+  } catch (err) {
+    await connection.rollback();
+    console.error('Set default card error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
+  }
+};
+
 exports.deleteCard = async (req, res) => {
   const userId = req.user.id;
   const { cardId } = req.params;

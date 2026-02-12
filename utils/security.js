@@ -43,7 +43,7 @@ const cors = () => {
       res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
       res.setHeader(
         'Access-Control-Allow-Headers',
-        'Content-Type, Authorization, X-Admin-Key, X-Admin-Bootstrap-Key, X-User-Id, X-Device-Id'
+        'Content-Type, Authorization, X-Admin-Bootstrap-Key, X-User-Id, X-Device-Id'
       );
       if (req.method === 'OPTIONS') {
         return res.status(204).end();
@@ -60,7 +60,7 @@ const cors = () => {
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
     res.setHeader(
       'Access-Control-Allow-Headers',
-      'Content-Type, Authorization, X-Admin-Key, X-Admin-Bootstrap-Key, X-User-Id, X-Device-Id'
+      'Content-Type, Authorization, X-Admin-Bootstrap-Key, X-User-Id, X-Device-Id'
     );
 
     if (req.method === 'OPTIONS') {
