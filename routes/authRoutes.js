@@ -10,11 +10,24 @@ const authLimiter = rateLimit({
   keyGenerator: (req) => `auth:${req.ip}`,
 });
 
+const otpIdentityLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: Number(process.env.OTP_IDENTITY_RATE_LIMIT_MAX) > 0
+    ? Number(process.env.OTP_IDENTITY_RATE_LIMIT_MAX)
+    : 10,
+  keyGenerator: (req) => {
+    const userId = req.body && req.body.userId ? String(req.body.userId).trim().toLowerCase() : '';
+    const email = req.body && req.body.email ? String(req.body.email).trim().toLowerCase() : '';
+    const identity = userId || email || 'unknown';
+    return `otp:${req.path}:${identity}`;
+  },
+});
+
 router.post('/signup', authLimiter, authController.signup);
-router.post('/verify', authLimiter, authController.verify);
-router.post('/resend-otp', authLimiter, authController.resendOtp); 
+router.post('/verify', authLimiter, otpIdentityLimiter, authController.verify);
+router.post('/resend-otp', authLimiter, otpIdentityLimiter, authController.resendOtp); 
 router.post('/login', authLimiter, authController.login);
-router.post('/login-otp', authLimiter, authController.loginOtp);
+router.post('/login-otp', authLimiter, otpIdentityLimiter, authController.loginOtp);
 router.post('/refresh', authLimiter, authController.refresh);
 router.post('/logout', authLimiter, authController.logout);
 router.get('/me', requireAuth, authController.me);

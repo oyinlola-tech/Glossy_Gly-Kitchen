@@ -1,4 +1,5 @@
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const db = require('../config/db');
 const { isUuid } = require('../utils/validation');
 const { initializeTransaction, verifyTransaction, chargeAuthorization, verifyWebhookSignature } = require('../utils/paystack');
@@ -7,6 +8,7 @@ const { sendMail } = require('../utils/mailer');
 const { buildReceiptEmail } = require('../utils/receiptTemplate');
 
 const buildReference = (orderId, prefix = 'PSK') => `${prefix}-${orderId.slice(0, 8)}-${Date.now()}`;
+const sha256Hex = (value) => crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
 
 const resolveReceiptStatus = (remoteStatus, gatewayResponse) => {
   const status = String(remoteStatus || '').toLowerCase();
@@ -158,6 +160,50 @@ const markPaymentSuccessAndConfirmOrder = async (connection, paymentRow, verifyD
       [paymentRow.order_id]
     );
   }
+};
+
+const reserveWebhookEvent = async (connection, { provider, eventId, reference, signatureHash, payloadHash }) => {
+  const [existing] = await connection.query(
+    `SELECT id, processed_at
+     FROM webhook_event_receipts
+     WHERE provider = ? AND signature_hash = ?
+     FOR UPDATE`,
+    [provider, signatureHash]
+  );
+
+  if (existing.length > 0) {
+    if (existing[0].processed_at) {
+      return { accepted: false, eventRowId: existing[0].id };
+    }
+    await connection.query(
+      `UPDATE webhook_event_receipts
+       SET event_id = COALESCE(event_id, ?),
+           reference = COALESCE(reference, ?),
+           payload_hash = ?
+       WHERE id = ?`,
+      [eventId || null, reference || null, payloadHash, existing[0].id]
+    );
+    return { accepted: true, eventRowId: existing[0].id };
+  }
+
+  const eventRowId = uuidv4();
+  await connection.query(
+    `INSERT INTO webhook_event_receipts
+     (id, provider, event_id, reference, signature_hash, payload_hash, first_seen_at, processed_at)
+     VALUES (?, ?, ?, ?, ?, ?, NOW(), NULL)`,
+    [eventRowId, provider, eventId || null, reference || null, signatureHash, payloadHash]
+  );
+
+  return { accepted: true, eventRowId };
+};
+
+const markWebhookEventProcessed = async (connection, eventRowId) => {
+  await connection.query(
+    `UPDATE webhook_event_receipts
+     SET processed_at = NOW()
+     WHERE id = ?`,
+    [eventRowId]
+  );
 };
 
 exports.initialize = async (req, res) => {
@@ -577,18 +623,39 @@ exports.paystackWebhook = async (req, res) => {
 
   const event = req.body || {};
   const data = event.data || {};
+  const eventId = event.id ? String(event.id) : null;
   const reference = data.reference;
   const status = String(data.status || '').toLowerCase();
-
-  if (!reference) {
-    return res.status(200).json({ message: 'Webhook received' });
-  }
+  const signatureHash = sha256Hex(String(signature || '').trim().toLowerCase());
+  const payloadHash = sha256Hex(rawBody);
 
   const connection = await db.getConnection();
+  let webhookEventRowId = null;
   let orderIdForReceipt = null;
   let receiptStatus = null;
   try {
     await connection.beginTransaction();
+
+    const replay = await reserveWebhookEvent(connection, {
+      provider: 'paystack',
+      eventId,
+      reference,
+      signatureHash,
+      payloadHash,
+    });
+    webhookEventRowId = replay.eventRowId;
+
+    if (!replay.accepted) {
+      await connection.commit();
+      return res.status(200).json({ message: 'Replay ignored' });
+    }
+
+    if (!reference) {
+      await markWebhookEventProcessed(connection, webhookEventRowId);
+      await connection.commit();
+      return res.status(200).json({ message: 'Webhook received' });
+    }
+
     const [rows] = await connection.query(
       `SELECT id, order_id, user_id, status
        FROM payments
@@ -598,6 +665,7 @@ exports.paystackWebhook = async (req, res) => {
     );
 
     if (rows.length === 0) {
+      await markWebhookEventProcessed(connection, webhookEventRowId);
       await connection.commit();
       return res.status(200).json({ message: 'Webhook received' });
     }
@@ -606,6 +674,7 @@ exports.paystackWebhook = async (req, res) => {
     orderIdForReceipt = payment.order_id;
 
     if (payment.status === 'success') {
+      await markWebhookEventProcessed(connection, webhookEventRowId);
       await connection.commit();
       return res.status(200).json({ message: 'Already processed' });
     }
@@ -624,6 +693,7 @@ exports.paystackWebhook = async (req, res) => {
       receiptStatus = resolveReceiptStatus(status, data.gateway_response);
     }
 
+    await markWebhookEventProcessed(connection, webhookEventRowId);
     await connection.commit();
 
     if (receiptStatus) {

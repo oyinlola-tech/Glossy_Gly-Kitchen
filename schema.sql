@@ -87,6 +87,21 @@ CREATE TABLE payments (
     INDEX idx_payments_status (status)
 );
 
+-- Webhook event receipts (replay protection)
+CREATE TABLE webhook_event_receipts (
+    id VARCHAR(36) PRIMARY KEY,
+    provider ENUM('paystack') NOT NULL,
+    event_id VARCHAR(120),
+    reference VARCHAR(120),
+    signature_hash VARCHAR(64) NOT NULL,
+    payload_hash VARCHAR(64) NOT NULL,
+    first_seen_at DATETIME NOT NULL,
+    processed_at DATETIME,
+    UNIQUE KEY unique_provider_signature (provider, signature_hash),
+    INDEX idx_webhook_event_ref (provider, reference),
+    INDEX idx_webhook_event_event_id (provider, event_id)
+);
+
 -- Saved payment cards (tokenized by Paystack authorization code)
 CREATE TABLE user_payment_cards (
     id VARCHAR(36) PRIMARY KEY,

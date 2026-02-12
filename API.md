@@ -135,11 +135,11 @@ Resend OTP to email.
 
 **Success (200)**
 ```json
-{ "message": "OTP resent successfully" }
+{ "message": "If an unverified account exists, OTP has been sent" }
 ```
 
-**Errors**
-- `404` No account found
+**Notes**
+- Uses privacy-preserving response messaging to avoid account enumeration.
 
 ---
 
@@ -166,8 +166,7 @@ Login with email + password.
 
 **Errors**
 - `400` Invalid credentials
-- `403` Account not verified
-- `404` Account not found
+- Uses generic error responses to reduce account enumeration risk
 
 ---
 
@@ -191,6 +190,10 @@ Login with email + OTP (fallback).
   "refreshToken": "9b3e07b7f3a8..."
 }
 ```
+
+**Errors**
+- `400` Invalid or expired OTP
+- `429` Too many invalid OTP attempts
 
 ---
 
@@ -753,6 +756,7 @@ Paystack webhook receiver (public endpoint).
 
 **Notes**
 - Signature is validated against `PAYSTACK_WEBHOOK_SECRET`.
+- Replay protection is enforced using signature-hash receipts for idempotent processing.
 - On successful charge event, payment is marked `success` and order is moved from `pending` to `confirmed`.
 - Payment receipts are emailed via Nodemailer for successful and failed/declined attempts.
 
@@ -955,7 +959,7 @@ List admin activity logs for admin UI/audit pages (supports pagination and filte
 | `Password must be at least X characters` | Password too short |
 | `Email or phone already registered` | Duplicate email/phone |
 | `Invalid or expired OTP` | OTP failed validation |
-| `No account found with this email` | Email not found |
+| `If an unverified account exists, OTP has been sent` | Privacy-preserving resend response |
 | `Invalid credentials` | Wrong email/password |
 | `Authorization token required` | Missing JWT |
 | `Invalid token` | JWT invalid/expired |

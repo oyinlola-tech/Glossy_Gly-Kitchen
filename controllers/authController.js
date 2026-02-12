@@ -7,6 +7,9 @@ const jwt = require('jsonwebtoken');
 const { validatePassword, hashPassword, comparePassword } = require('../utils/password');
 const { createRefreshToken, hashToken, refreshExpiryDate } = require('../utils/tokens');
 const { sendMail } = require('../utils/mailer');
+const { isLocked, recordFailure, clearFailures } = require('../utils/otpGuard');
+
+const DUMMY_PASSWORD_HASH = '$2a$10$7EqJtq98hPqEX7fNZaFWoOaJY8fDeihh5Z8SGvtQvE4H14R/2uOe';
 
 const issueAccessToken = (user) => {
   const secret = process.env.JWT_SECRET;
@@ -160,6 +163,12 @@ exports.verify = async (req, res) => {
     return res.status(400).json({ error: 'userId and otp are required' });
   }
 
+  const lockState = isLocked('verify', userId);
+  if (lockState.locked) {
+    res.setHeader('Retry-After', String(lockState.retryAfterSec));
+    return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+  }
+
   try {
     // Find user with matching OTP and not expired
     const [users] = await db.query(
@@ -169,6 +178,11 @@ exports.verify = async (req, res) => {
     );
 
     if (users.length === 0) {
+      const afterFailure = recordFailure('verify', userId);
+      if (afterFailure.locked) {
+        res.setHeader('Retry-After', String(afterFailure.retryAfterSec));
+        return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+      }
       return res.status(400).json({ error: 'Invalid or expired OTP' });
     }
 
@@ -179,6 +193,7 @@ exports.verify = async (req, res) => {
       [userId]
     );
 
+    clearFailures('verify', userId);
     const tokens = await issueTokens({ id: userId, email: users[0].email }, req);
     res.json({ message: 'Account verified successfully.', ...tokens });
 
@@ -205,11 +220,8 @@ exports.resendOtp = async (req, res) => {
       'SELECT id, verified FROM users WHERE email = ?',
       [email]
     );
-    if (users.length === 0) {
-      return res.status(404).json({ error: 'No account found with this email' });
-    }
-    if (users[0].verified) {
-      return res.status(400).json({ error: 'Account is already verified' });
+    if (users.length === 0 || users[0].verified) {
+      return res.json({ message: 'If an unverified account exists, OTP has been sent' });
     }
 
     const userId = users[0].id;
@@ -224,7 +236,7 @@ exports.resendOtp = async (req, res) => {
     await sendOtpEmail(email, otp);
     console.log(`OTP resent to ${email}`);
 
-    res.json({ message: 'OTP resent successfully' });
+    res.json({ message: 'If an unverified account exists, OTP has been sent' });
 
   } catch (err) {
     console.error('Resend OTP error:', err);
@@ -251,19 +263,16 @@ exports.login = async (req, res) => {
     );
 
     if (users.length === 0) {
-      return res.status(404).json({ error: 'Account not found' });
+      await comparePassword(password, DUMMY_PASSWORD_HASH);
+      return res.status(400).json({ error: 'Invalid credentials' });
     }
 
     const user = users[0];
-    if (!user.verified) {
-      return res.status(403).json({ error: 'Account not verified' });
-    }
-    if (user.is_suspended) {
-      return res.status(403).json({ error: 'Account is suspended' });
-    }
-
-    const passwordMatches = await comparePassword(password, user.password_hash || '');
+    const passwordMatches = await comparePassword(password, user.password_hash || DUMMY_PASSWORD_HASH);
     if (!passwordMatches) {
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+    if (!user.verified || user.is_suspended) {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
 
@@ -286,6 +295,13 @@ exports.loginOtp = async (req, res) => {
     return res.status(400).json({ error: 'Invalid email address' });
   }
 
+  const identity = email.trim().toLowerCase();
+  const lockState = isLocked('login-otp', identity);
+  if (lockState.locked) {
+    res.setHeader('Retry-After', String(lockState.retryAfterSec));
+    return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+  }
+
   try {
     const [users] = await db.query(
       `SELECT id, email, verified, otp_code, otp_expires, is_suspended
@@ -294,18 +310,30 @@ exports.loginOtp = async (req, res) => {
     );
 
     if (users.length === 0) {
-      return res.status(404).json({ error: 'Account not found' });
+      const afterFailure = recordFailure('login-otp', identity);
+      if (afterFailure.locked) {
+        res.setHeader('Retry-After', String(afterFailure.retryAfterSec));
+        return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+      }
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
     }
 
     const user = users[0];
-    if (!user.verified) {
-      return res.status(403).json({ error: 'Account not verified' });
-    }
-    if (user.is_suspended) {
-      return res.status(403).json({ error: 'Account is suspended' });
+    if (!user.verified || user.is_suspended) {
+      const afterFailure = recordFailure('login-otp', identity);
+      if (afterFailure.locked) {
+        res.setHeader('Retry-After', String(afterFailure.retryAfterSec));
+        return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+      }
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
     }
 
     if (!user.otp_code || user.otp_code !== otp || !user.otp_expires || user.otp_expires <= new Date()) {
+      const afterFailure = recordFailure('login-otp', identity);
+      if (afterFailure.locked) {
+        res.setHeader('Retry-After', String(afterFailure.retryAfterSec));
+        return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+      }
       return res.status(400).json({ error: 'Invalid or expired OTP' });
     }
 
@@ -314,6 +342,7 @@ exports.loginOtp = async (req, res) => {
       [user.id]
     );
 
+    clearFailures('login-otp', identity);
     const tokens = await issueTokens(user, req);
     res.json({ message: 'Login successful', ...tokens });
   } catch (err) {

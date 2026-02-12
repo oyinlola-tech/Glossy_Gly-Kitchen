@@ -10,7 +10,7 @@ const hashAdminAuditId = (adminId) => crypto.createHash('sha256').update(adminId
 const getTokenFromHeader = (req) => {
   const header = req.get('authorization');
   if (!header) return null;
-  const [scheme, token] = header.split(' ');
+  const [scheme, token] = header.trim().split(/\s+/);
   if (!scheme || scheme.toLowerCase() !== 'bearer' || !token) return null;
   return token.trim();
 };
