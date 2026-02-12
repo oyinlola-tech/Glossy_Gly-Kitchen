@@ -49,10 +49,18 @@ CREATE TABLE orders (
     id VARCHAR(36) PRIMARY KEY,
     user_id VARCHAR(36) NOT NULL,
     total_amount DECIMAL(10,2) NOT NULL,
+    discount_amount DECIMAL(10,2) DEFAULT 0,
+    payable_amount DECIMAL(10,2),
+    coupon_id VARCHAR(36),
+    coupon_code VARCHAR(40),
+    coupon_discount_type ENUM('percentage','fixed'),
+    coupon_discount_value DECIMAL(10,2),
     status ENUM('pending','confirmed','preparing','out_for_delivery','completed','cancelled') DEFAULT 'pending',
     created_at DATETIME,
     updated_at DATETIME,
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    INDEX idx_orders_coupon_id (coupon_id),
+    INDEX idx_orders_coupon_code (coupon_code)
 );
 
 -- Order items (snapshot of price at order time)
@@ -105,6 +113,23 @@ CREATE TABLE coupons (
     INDEX idx_coupons_created_by_admin (created_by_admin_id),
     INDEX idx_coupons_active (is_active),
     INDEX idx_coupons_expires_at (expires_at)
+);
+
+CREATE TABLE coupon_redemptions (
+    id VARCHAR(36) PRIMARY KEY,
+    coupon_id VARCHAR(36) NOT NULL,
+    order_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    status ENUM('reserved','consumed','released') DEFAULT 'reserved',
+    created_at DATETIME,
+    updated_at DATETIME,
+    FOREIGN KEY (coupon_id) REFERENCES coupons(id) ON DELETE CASCADE,
+    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_coupon_order (coupon_id, order_id),
+    UNIQUE KEY unique_order_coupon_assignment (order_id),
+    INDEX idx_coupon_redemptions_coupon_status (coupon_id, status),
+    INDEX idx_coupon_redemptions_user (user_id)
 );
 
 -- Webhook event receipts (replay protection)

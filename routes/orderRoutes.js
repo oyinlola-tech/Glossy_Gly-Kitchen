@@ -9,6 +9,8 @@ const { auditAdminAction } = require('../utils/audit');
 router.post('/', requireAuth, requireVerifiedUser, orderController.createOrder);
 router.get('/', requireAuth, requireVerifiedUser, orderController.listMyOrders);
 router.get('/:id', requireAuth, requireVerifiedUser, orderController.getOrderById);
+router.post('/:id/coupon/validate', requireAuth, requireVerifiedUser, orderController.validateCouponForOrder);
+router.post('/:id/coupon/apply', requireAuth, requireVerifiedUser, orderController.applyCouponToOrder);
 router.patch(
   '/:id/status',
   requireAdminKey,

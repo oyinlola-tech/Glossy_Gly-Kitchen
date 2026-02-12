@@ -641,29 +641,46 @@ exports.createUserReferralCode = async (req, res) => {
 
 exports.listUserReferralCodes = async (req, res) => {
   const { page, limit, offset } = parsePaging(req);
-  const where = ['referral_code IS NOT NULL'];
+  const where = ['u.referral_code IS NOT NULL'];
   const values = [];
 
   if (req.query.userId) {
     if (!isUuid(req.query.userId)) {
       return res.status(400).json({ error: 'Invalid userId' });
     }
-    where.push('id = ?');
+    where.push('u.id = ?');
     values.push(req.query.userId);
   }
   if (req.query.code) {
-    where.push('referral_code = ?');
+    where.push('u.referral_code = ?');
     values.push(String(req.query.code).trim().toUpperCase());
   }
 
   const whereClause = `WHERE ${where.join(' AND ')}`;
   try {
-    const [countRows] = await db.query(`SELECT COUNT(*) AS total FROM users ${whereClause}`, values);
+    const [countRows] = await db.query(`SELECT COUNT(*) AS total FROM users u ${whereClause}`, values);
     const [rows] = await db.query(
-      `SELECT id AS user_id, email, referral_code, created_at, updated_at
-       FROM users
+      `SELECT
+         u.id AS user_id,
+         u.email,
+         u.referral_code,
+         u.created_at,
+         u.updated_at,
+         (
+           SELECT COUNT(*)
+           FROM users ru
+           WHERE ru.referred_by = u.id
+         ) AS referred_customers,
+         (
+           SELECT COUNT(*)
+           FROM orders o
+           JOIN users ru2 ON ru2.id = o.user_id
+           WHERE ru2.referred_by = u.id
+             AND o.status <> 'cancelled'
+         ) AS referred_orders_count
+       FROM users u
        ${whereClause}
-       ORDER BY updated_at DESC
+       ORDER BY u.updated_at DESC
        LIMIT ? OFFSET ?`,
       [...values, limit, offset]
     );

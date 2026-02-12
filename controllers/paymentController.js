@@ -20,9 +20,29 @@ const resolveReceiptStatus = (remoteStatus, gatewayResponse) => {
   return status || 'failed';
 };
 
+const consumeCouponRedemption = async (connection, orderId) => {
+  const [rows] = await connection.query(
+    `SELECT id, status
+     FROM coupon_redemptions
+     WHERE order_id = ?
+     LIMIT 1
+     FOR UPDATE`,
+    [orderId]
+  );
+  if (rows.length === 0) return;
+  if (rows[0].status !== 'reserved') return;
+
+  await connection.query(
+    `UPDATE coupon_redemptions
+     SET status = 'consumed', updated_at = NOW()
+     WHERE id = ?`,
+    [rows[0].id]
+  );
+};
+
 const getOrderEmailAndItems = async (connection, orderId) => {
   const [orders] = await connection.query(
-    `SELECT o.id, o.total_amount, u.email
+    `SELECT o.id, o.total_amount, COALESCE(o.payable_amount, o.total_amount) AS payable_amount, u.email
      FROM orders o
      JOIN users u ON u.id = o.user_id
      WHERE o.id = ?`,
@@ -40,7 +60,7 @@ const getOrderEmailAndItems = async (connection, orderId) => {
 
   return {
     orderId: orders[0].id,
-    totalAmount: orders[0].total_amount,
+    totalAmount: orders[0].payable_amount,
     customerEmail: orders[0].email,
     items,
   };
@@ -161,6 +181,7 @@ const markPaymentSuccessAndConfirmOrder = async (connection, paymentRow, verifyD
       [paymentRow.order_id]
     );
   }
+  await consumeCouponRedemption(connection, paymentRow.order_id);
 };
 
 const reserveWebhookEvent = async (connection, { provider, eventId, reference, signatureHash, payloadHash }) => {
@@ -230,7 +251,7 @@ exports.initialize = async (req, res) => {
 
   try {
     const [orders] = await db.query(
-      `SELECT o.id, o.user_id, o.total_amount, o.status, u.email
+      `SELECT o.id, o.user_id, o.total_amount, COALESCE(o.payable_amount, o.total_amount) AS payable_amount, o.status, u.email
        FROM orders o
        JOIN users u ON u.id = o.user_id
        WHERE o.id = ? AND o.user_id = ?`,
@@ -263,7 +284,7 @@ exports.initialize = async (req, res) => {
     const reference = buildReference(orderId);
     const data = await initializeTransaction({
       email: order.email,
-      amount: order.total_amount,
+      amount: order.payable_amount,
       reference,
       callbackUrl,
       metadata: { orderId, userId, saveCard: Boolean(saveCard) },
@@ -273,7 +294,7 @@ exports.initialize = async (req, res) => {
       `INSERT INTO payments
        (id, order_id, user_id, provider, reference, amount, currency, status, gateway_response, created_at, updated_at)
        VALUES (?, ?, ?, 'paystack', ?, ?, 'NGN', 'initialized', ?, NOW(), NOW())`,
-      [uuidv4(), orderId, userId, reference, order.total_amount, JSON.stringify({ access_code: data.access_code || null, saveCard: Boolean(saveCard) })]
+      [uuidv4(), orderId, userId, reference, order.payable_amount, JSON.stringify({ access_code: data.access_code || null, saveCard: Boolean(saveCard) })]
     );
 
     return res.status(201).json({
@@ -513,7 +534,7 @@ exports.payWithSavedCard = async (req, res) => {
     await connection.beginTransaction();
 
     const [orders] = await connection.query(
-      `SELECT o.id, o.user_id, o.total_amount, o.status, u.email
+      `SELECT o.id, o.user_id, o.total_amount, COALESCE(o.payable_amount, o.total_amount) AS payable_amount, o.status, u.email
        FROM orders o
        JOIN users u ON u.id = o.user_id
        WHERE o.id = ? AND o.user_id = ?
@@ -558,7 +579,7 @@ exports.payWithSavedCard = async (req, res) => {
     const reference = buildReference(orderId, 'PSK-AUTO');
     const chargeData = await chargeAuthorization({
       email: order.email,
-      amount: order.total_amount,
+      amount: order.payable_amount,
       authorizationCode: cards[0].authorization_code,
       reference,
       metadata: { orderId, userId, autoDebit: true, cardId },
@@ -574,7 +595,7 @@ exports.payWithSavedCard = async (req, res) => {
         orderId,
         userId,
         reference,
-        order.total_amount,
+        order.payable_amount,
         chargeStatus === 'success' ? 'success' : 'failed',
         JSON.stringify(chargeData),
         chargeStatus === 'success' ? (chargeData.paid_at ? new Date(chargeData.paid_at) : new Date()) : null,
@@ -585,6 +606,7 @@ exports.payWithSavedCard = async (req, res) => {
       if (isTransitionAllowed(order.status, 'confirmed')) {
         await connection.query('UPDATE orders SET status = ?, updated_at = NOW() WHERE id = ?', ['confirmed', orderId]);
       }
+      await consumeCouponRedemption(connection, orderId);
       await connection.query('UPDATE user_payment_cards SET last_used_at = NOW(), updated_at = NOW() WHERE id = ?', [cardId]);
       await connection.commit();
 
