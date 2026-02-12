@@ -1,4 +1,7 @@
+const crypto = require('crypto');
+
 const attempts = new Map();
+const MAX_KEYS = 10_000;
 
 const WINDOW_MS = Number(process.env.OTP_ATTEMPT_WINDOW_MS) > 0
   ? Number(process.env.OTP_ATTEMPT_WINDOW_MS)
@@ -12,7 +15,23 @@ const MAX_ATTEMPTS = Number(process.env.OTP_MAX_ATTEMPTS) > 0
   ? Number(process.env.OTP_MAX_ATTEMPTS)
   : 5;
 
-const keyFor = (scope, identity) => `${scope}:${String(identity || '').trim().toLowerCase()}`;
+const keyFor = (scope, identity) => {
+  const raw = `${scope}:${String(identity || '').trim().toLowerCase()}`;
+  if (raw.length <= 160) return raw;
+  return crypto.createHash('sha256').update(raw, 'utf8').digest('hex');
+};
+
+const prune = () => {
+  const now = Date.now();
+  for (const [key, entry] of attempts.entries()) {
+    if (
+      (entry.lockedUntil && entry.lockedUntil <= now) ||
+      (entry.windowStart && now > entry.windowStart + WINDOW_MS + LOCK_MS)
+    ) {
+      attempts.delete(key);
+    }
+  }
+};
 
 const isLocked = (scope, identity) => {
   const key = keyFor(scope, identity);
@@ -34,6 +53,9 @@ const isLocked = (scope, identity) => {
 };
 
 const recordFailure = (scope, identity) => {
+  if (attempts.size >= MAX_KEYS) {
+    prune();
+  }
   const key = keyFor(scope, identity);
   const now = Date.now();
   let entry = attempts.get(key);
@@ -64,4 +86,3 @@ module.exports = {
   recordFailure,
   clearFailures,
 };
-

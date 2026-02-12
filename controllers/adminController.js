@@ -2,7 +2,7 @@ const db = require('../config/db');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
-const { isUuid, isValidEmail, toInt } = require('../utils/validation');
+const { isUuid, isValidEmail, toInt, toNumber } = require('../utils/validation');
 const { validatePassword, hashPassword, comparePassword } = require('../utils/password');
 const { createRefreshToken, hashToken, adminRefreshExpiryDate } = require('../utils/tokens');
 const { isTransitionAllowed } = require('../utils/statusTransitions');
@@ -10,6 +10,11 @@ const { adminIssuer } = require('../utils/adminJwtAuth');
 const { safeEqual } = require('../utils/adminAuth');
 const generateOtp = require('../utils/generateOtp');
 const { sendMail } = require('../utils/mailer');
+const { isLocked, recordFailure, clearFailures } = require('../utils/otpGuard');
+
+const DUMMY_PASSWORD_HASH = '$2a$10$7EqJtq98hPqEX7fNZaFWoOaJY8fDeihh5Z8SGvtQvE4H14R/2uOe';
+const COUPON_CODE_REGEX = /^[A-Z0-9_-]{4,40}$/;
+const REFERRAL_CODE_REGEX = /^[A-Z0-9]{6,20}$/;
 
 const parsePaging = (req) => {
   const page = Math.max(toInt(req.query.page) || 1, 1);
@@ -18,9 +23,45 @@ const parsePaging = (req) => {
   return { page, limit, offset };
 };
 
+const parseDateTimeOrNull = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
+};
+
+const generateCode = (prefix, length) => {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const bytes = crypto.randomBytes(length);
+  let suffix = '';
+  for (let i = 0; i < length; i += 1) {
+    suffix += alphabet[bytes[i] % alphabet.length];
+  }
+  return `${prefix}${suffix}`;
+};
+
+const generateUniqueCouponCode = async (connection, attempts = 10) => {
+  for (let i = 0; i < attempts; i += 1) {
+    const candidate = generateCode('CPN', 9);
+    const [rows] = await connection.query('SELECT id FROM coupons WHERE code = ? LIMIT 1', [candidate]);
+    if (rows.length === 0) return candidate;
+  }
+  throw new Error('Could not generate unique coupon code');
+};
+
+const generateUniqueUserReferralCode = async (connection, attempts = 10) => {
+  for (let i = 0; i < attempts; i += 1) {
+    const candidate = generateCode('REF', 8);
+    const [rows] = await connection.query('SELECT id FROM users WHERE referral_code = ? LIMIT 1', [candidate]);
+    if (rows.length === 0) return candidate;
+  }
+  throw new Error('Could not generate unique referral code');
+};
+
 const getDeviceFingerprint = (req, bodyDeviceId) => {
   const headerDeviceId = req.get('x-device-id');
-  const deviceIdentity = headerDeviceId || bodyDeviceId || req.get('user-agent') || 'unknown-device';
+  const deviceIdentityRaw = headerDeviceId || bodyDeviceId || req.get('user-agent') || 'unknown-device';
+  const deviceIdentity = String(deviceIdentityRaw).slice(0, 512);
   return crypto.createHash('sha256').update(deviceIdentity, 'utf8').digest('hex');
 };
 
@@ -97,7 +138,8 @@ exports.bootstrap = async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized bootstrap request' });
   }
 
-  const { email, password, fullName, role } = req.body;
+  const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const { password, fullName, role } = req.body;
   if (!email || !isValidEmail(email)) {
     return res.status(400).json({ error: 'Valid email is required' });
   }
@@ -152,7 +194,8 @@ exports.bootstrap = async (req, res) => {
 };
 
 exports.login = async (req, res) => {
-  const { email, password, otp, deviceId, deviceLabel } = req.body;
+  const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const { password, otp, deviceId, deviceLabel } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: 'email and password are required' });
   }
@@ -166,15 +209,17 @@ exports.login = async (req, res) => {
       [email]
     );
     if (admins.length === 0) {
-      return res.status(404).json({ error: 'Admin account not found' });
+      await comparePassword(password, DUMMY_PASSWORD_HASH);
+      return res.status(400).json({ error: 'Invalid credentials' });
     }
 
     const admin = admins[0];
     if (!admin.is_active) {
-      return res.status(403).json({ error: 'Admin account is inactive' });
+      await comparePassword(password, admin.password_hash || DUMMY_PASSWORD_HASH);
+      return res.status(400).json({ error: 'Invalid credentials' });
     }
 
-    const ok = await comparePassword(password, admin.password_hash);
+    const ok = await comparePassword(password, admin.password_hash || DUMMY_PASSWORD_HASH);
     if (!ok) {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
@@ -189,6 +234,12 @@ exports.login = async (req, res) => {
     const requiresOtp = !trustedDevice || (trustedDevice.last_ip && trustedDevice.last_ip !== req.ip);
 
     if (requiresOtp) {
+      const otpScope = `admin-login-otp:${admin.id}:${deviceHash}:${req.ip}`;
+      const lockState = isLocked('admin-login-otp', otpScope);
+      if (lockState.locked) {
+        res.setHeader('Retry-After', String(lockState.retryAfterSec));
+        return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+      }
       if (!otp) {
         const otpCode = generateOtp();
         const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
@@ -212,6 +263,14 @@ exports.login = async (req, res) => {
           otpRequired: true,
         });
       }
+      if (!/^\d{6}$/.test(String(otp).trim())) {
+        const afterFailure = recordFailure('admin-login-otp', otpScope);
+        if (afterFailure.locked) {
+          res.setHeader('Retry-After', String(afterFailure.retryAfterSec));
+          return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+        }
+        return res.status(400).json({ error: 'Invalid or expired admin OTP' });
+      }
 
       const [otpRows] = await db.query(
         `SELECT id, otp_code, otp_expires
@@ -227,10 +286,16 @@ exports.login = async (req, res) => {
         otpRows[0].otp_code !== String(otp) ||
         new Date(otpRows[0].otp_expires) <= new Date()
       ) {
+        const afterFailure = recordFailure('admin-login-otp', otpScope);
+        if (afterFailure.locked) {
+          res.setHeader('Retry-After', String(afterFailure.retryAfterSec));
+          return res.status(429).json({ error: 'Too many invalid OTP attempts. Try again later.' });
+        }
         return res.status(400).json({ error: 'Invalid or expired admin OTP' });
       }
 
       await db.query('UPDATE admin_login_otps SET consumed_at = NOW() WHERE id = ?', [otpRows[0].id]);
+      clearFailures('admin-login-otp', otpScope);
     }
 
     await markDeviceTrusted(admin.id, deviceHash, req, deviceLabel);
@@ -336,7 +401,8 @@ exports.me = async (req, res) => {
 };
 
 exports.createAdmin = async (req, res) => {
-  const { email, password, fullName, role } = req.body;
+  const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const { password, fullName, role } = req.body;
   if (!email || !isValidEmail(email)) {
     return res.status(400).json({ error: 'Valid email is required' });
   }
@@ -374,6 +440,242 @@ exports.createAdmin = async (req, res) => {
     });
   } catch (err) {
     console.error('Create admin error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+exports.createCoupon = async (req, res) => {
+  const {
+    code,
+    description,
+    discountType,
+    discountValue,
+    maxRedemptions,
+    startsAt,
+    expiresAt,
+    isActive,
+  } = req.body || {};
+
+  const normalizedType = String(discountType || '').trim().toLowerCase();
+  if (!['percentage', 'fixed'].includes(normalizedType)) {
+    return res.status(400).json({ error: 'discountType must be percentage or fixed' });
+  }
+
+  const discount = toNumber(discountValue);
+  if (discount === null || discount <= 0) {
+    return res.status(400).json({ error: 'discountValue must be a positive number' });
+  }
+  if (normalizedType === 'percentage' && discount > 100) {
+    return res.status(400).json({ error: 'percentage discountValue cannot exceed 100' });
+  }
+
+  const maxUses = maxRedemptions === undefined || maxRedemptions === null || maxRedemptions === ''
+    ? null
+    : toInt(maxRedemptions);
+  if (maxUses !== null && maxUses <= 0) {
+    return res.status(400).json({ error: 'maxRedemptions must be a positive integer' });
+  }
+
+  const startsDate = parseDateTimeOrNull(startsAt);
+  const expiresDate = parseDateTimeOrNull(expiresAt);
+  if (startsAt !== undefined && startsDate === null) {
+    return res.status(400).json({ error: 'Invalid startsAt datetime' });
+  }
+  if (expiresAt !== undefined && expiresDate === null) {
+    return res.status(400).json({ error: 'Invalid expiresAt datetime' });
+  }
+  if (startsDate && expiresDate && expiresDate <= startsDate) {
+    return res.status(400).json({ error: 'expiresAt must be after startsAt' });
+  }
+
+  let normalizedCode = null;
+  if (code !== undefined && code !== null && String(code).trim() !== '') {
+    normalizedCode = String(code).trim().toUpperCase();
+    if (!COUPON_CODE_REGEX.test(normalizedCode)) {
+      return res.status(400).json({ error: 'Invalid coupon code format' });
+    }
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const couponCode = normalizedCode || await generateUniqueCouponCode(connection);
+    const [existing] = await connection.query('SELECT id FROM coupons WHERE code = ? LIMIT 1', [couponCode]);
+    if (existing.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({ error: 'Coupon code already exists' });
+    }
+
+    const couponId = uuidv4();
+    await connection.query(
+      `INSERT INTO coupons
+       (id, code, description, discount_type, discount_value, max_redemptions, redemptions_count, starts_at, expires_at, is_active, created_by_admin_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, NOW(), NOW())`,
+      [
+        couponId,
+        couponCode,
+        description ? String(description).trim().slice(0, 255) : null,
+        normalizedType,
+        discount,
+        maxUses,
+        startsDate,
+        expiresDate,
+        isActive === undefined ? 1 : (isActive ? 1 : 0),
+        req.admin.id,
+      ]
+    );
+
+    const [rows] = await connection.query(
+      `SELECT id, code, description, discount_type, discount_value, max_redemptions, redemptions_count, starts_at, expires_at, is_active, created_by_admin_id, created_at, updated_at
+       FROM coupons WHERE id = ?`,
+      [couponId]
+    );
+
+    await connection.commit();
+    return res.status(201).json(rows[0]);
+  } catch (err) {
+    await connection.rollback();
+    console.error('Create coupon error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
+  }
+};
+
+exports.listCoupons = async (req, res) => {
+  const { page, limit, offset } = parsePaging(req);
+  const where = [];
+  const values = [];
+
+  if (req.query.active === 'true' || req.query.active === 'false') {
+    where.push('is_active = ?');
+    values.push(req.query.active === 'true' ? 1 : 0);
+  }
+  if (req.query.code) {
+    const code = String(req.query.code).trim().toUpperCase();
+    where.push('code = ?');
+    values.push(code);
+  }
+
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  try {
+    const [countRows] = await db.query(`SELECT COUNT(*) AS total FROM coupons ${whereClause}`, values);
+    const [rows] = await db.query(
+      `SELECT id, code, description, discount_type, discount_value, max_redemptions, redemptions_count, starts_at, expires_at, is_active, created_by_admin_id, created_at, updated_at
+       FROM coupons
+       ${whereClause}
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...values, limit, offset]
+    );
+
+    return res.json({
+      page,
+      limit,
+      total: countRows[0].total,
+      coupons: rows,
+    });
+  } catch (err) {
+    console.error('List coupons error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+exports.createUserReferralCode = async (req, res) => {
+  const { userId, code } = req.body || {};
+  if (!isUuid(userId)) {
+    return res.status(400).json({ error: 'Valid userId is required' });
+  }
+
+  let normalizedCode = null;
+  if (code !== undefined && code !== null && String(code).trim() !== '') {
+    normalizedCode = String(code).trim().toUpperCase();
+    if (!REFERRAL_CODE_REGEX.test(normalizedCode)) {
+      return res.status(400).json({ error: 'Invalid referral code format' });
+    }
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [users] = await connection.query(
+      'SELECT id FROM users WHERE id = ? FOR UPDATE',
+      [userId]
+    );
+    if (users.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const referralCode = normalizedCode || await generateUniqueUserReferralCode(connection);
+    const [dup] = await connection.query(
+      'SELECT id FROM users WHERE referral_code = ? AND id <> ? LIMIT 1',
+      [referralCode, userId]
+    );
+    if (dup.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({ error: 'Referral code already exists' });
+    }
+
+    await connection.query(
+      'UPDATE users SET referral_code = ?, updated_at = NOW() WHERE id = ?',
+      [referralCode, userId]
+    );
+
+    await connection.commit();
+    return res.status(201).json({
+      message: 'Referral code created successfully',
+      userId,
+      referralCode,
+    });
+  } catch (err) {
+    await connection.rollback();
+    console.error('Create user referral code error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
+  }
+};
+
+exports.listUserReferralCodes = async (req, res) => {
+  const { page, limit, offset } = parsePaging(req);
+  const where = ['referral_code IS NOT NULL'];
+  const values = [];
+
+  if (req.query.userId) {
+    if (!isUuid(req.query.userId)) {
+      return res.status(400).json({ error: 'Invalid userId' });
+    }
+    where.push('id = ?');
+    values.push(req.query.userId);
+  }
+  if (req.query.code) {
+    where.push('referral_code = ?');
+    values.push(String(req.query.code).trim().toUpperCase());
+  }
+
+  const whereClause = `WHERE ${where.join(' AND ')}`;
+  try {
+    const [countRows] = await db.query(`SELECT COUNT(*) AS total FROM users ${whereClause}`, values);
+    const [rows] = await db.query(
+      `SELECT id AS user_id, email, referral_code, created_at, updated_at
+       FROM users
+       ${whereClause}
+       ORDER BY updated_at DESC
+       LIMIT ? OFFSET ?`,
+      [...values, limit, offset]
+    );
+
+    return res.json({
+      page,
+      limit,
+      total: countRows[0].total,
+      referralCodes: rows,
+    });
+  } catch (err) {
+    console.error('List referral codes error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };

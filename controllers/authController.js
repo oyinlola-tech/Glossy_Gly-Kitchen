@@ -1,8 +1,8 @@
 ﻿const db = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
 const generateOtp = require('../utils/generateOtp');
-const { generateReferralCode, validateReferralCode } = require('../utils/referralHelper');
-const { isValidEmail, isValidPhone } = require('../utils/validation');
+const { generateUniqueReferralCode, validateReferralCode } = require('../utils/referralHelper');
+const { isValidEmail, isValidPhone, isUuid } = require('../utils/validation');
 const jwt = require('jsonwebtoken');
 const { validatePassword, hashPassword, comparePassword } = require('../utils/password');
 const { createRefreshToken, hashToken, refreshExpiryDate } = require('../utils/tokens');
@@ -115,7 +115,7 @@ exports.signup = async (req, res) => {
     const userId = uuidv4();
     const otp = generateOtp();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-    const newReferralCode = generateReferralCode();
+    const newReferralCode = await generateUniqueReferralCode(connection);
     const passwordHash = await hashPassword(password);
 
     await connection.query(
@@ -162,6 +162,12 @@ exports.verify = async (req, res) => {
   if (!userId || !otp) {
     return res.status(400).json({ error: 'userId and otp are required' });
   }
+  if (!isUuid(String(userId).trim())) {
+    return res.status(400).json({ error: 'Invalid userId' });
+  }
+  if (!/^\d{6}$/.test(String(otp).trim())) {
+    return res.status(400).json({ error: 'Invalid or expired OTP' });
+  }
 
   const lockState = isLocked('verify', userId);
   if (lockState.locked) {
@@ -205,7 +211,7 @@ exports.verify = async (req, res) => {
 
 // -------------------- POST /resend-otp (Bonus) --------------------
 exports.resendOtp = async (req, res) => {
-  const { email } = req.body;
+  const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
 
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
@@ -246,7 +252,8 @@ exports.resendOtp = async (req, res) => {
 
 // -------------------- POST /login --------------------
 exports.login = async (req, res) => {
-  const { email, password } = req.body;
+  const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const { password } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ error: 'email and password are required' });
@@ -286,13 +293,17 @@ exports.login = async (req, res) => {
 
 // -------------------- POST /login-otp --------------------
 exports.loginOtp = async (req, res) => {
-  const { email, otp } = req.body;
+  const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const { otp } = req.body;
 
   if (!email || !otp) {
     return res.status(400).json({ error: 'email and otp are required' });
   }
   if (!isValidEmail(email)) {
     return res.status(400).json({ error: 'Invalid email address' });
+  }
+  if (!/^\d{6}$/.test(String(otp).trim())) {
+    return res.status(400).json({ error: 'Invalid or expired OTP' });
   }
 
   const identity = email.trim().toLowerCase();
@@ -558,6 +569,46 @@ exports.updateMe = async (req, res) => {
   } catch (err) {
     await connection.rollback();
     console.error('Update profile error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
+  }
+};
+
+// -------------------- POST /auth/referral-code/generate --------------------
+exports.generateReferralCode = async (req, res) => {
+  const userId = req.user && req.user.id;
+  if (!userId || !isUuid(userId)) {
+    return res.status(401).json({ error: 'Authorization token required' });
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [users] = await connection.query(
+      'SELECT id FROM users WHERE id = ? FOR UPDATE',
+      [userId]
+    );
+    if (users.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const referralCode = await generateUniqueReferralCode(connection);
+    await connection.query(
+      'UPDATE users SET referral_code = ?, updated_at = NOW() WHERE id = ?',
+      [referralCode, userId]
+    );
+
+    await connection.commit();
+    return res.status(201).json({
+      message: 'Referral code generated successfully',
+      referralCode,
+    });
+  } catch (err) {
+    await connection.rollback();
+    console.error('Generate referral code error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   } finally {
     connection.release();

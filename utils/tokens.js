@@ -10,12 +10,14 @@ const hashToken = (token) => {
 
 const refreshExpiryDate = () => {
   const days = Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS);
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  const safeDays = Number.isFinite(days) && days > 0 && days <= 365 ? days : 30;
+  return new Date(Date.now() + safeDays * 24 * 60 * 60 * 1000);
 };
 
 const adminRefreshExpiryDate = () => {
   const days = Number(process.env.ADMIN_REFRESH_TOKEN_EXPIRES_DAYS);
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  const safeDays = Number.isFinite(days) && days > 0 && days <= 365 ? days : 30;
+  return new Date(Date.now() + safeDays * 24 * 60 * 60 * 1000);
 };
 
 module.exports = {

@@ -2,9 +2,20 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
+const sanitizeHeaderValue = (value, max = 64) => {
+  if (typeof value !== 'string') return null;
+  const cleaned = value.replace(/[^A-Za-z0-9._:-]/g, '').slice(0, max);
+  return cleaned || null;
+};
+
+const sanitizeLogField = (value, max = 512) => {
+  const raw = String(value || '');
+  return raw.replace(/[\r\n\t]/g, ' ').slice(0, max);
+};
+
 const requestId = (req, res, next) => {
-  const incoming = req.get('x-request-id');
-  const id = incoming && incoming.length <= 64 ? incoming : uuidv4();
+  const incoming = sanitizeHeaderValue(req.get('x-request-id'), 64);
+  const id = incoming || uuidv4();
   req.requestId = id;
   res.setHeader('X-Request-Id', id);
   next();
@@ -34,7 +45,12 @@ const requestLogger = (req, res, next) => {
     const durationMs = Date.now() - start;
     const userId = req.user && req.user.id ? req.user.id : 'anonymous';
     const adminTag = req.admin && req.admin.keyId ? ` admin=${req.admin.keyId.slice(0, 8)}` : '';
-    const line = `[${new Date().toISOString()}] ${req.method} ${req.originalUrl} ${res.statusCode} ${durationMs}ms user=${userId}${adminTag} ip=${req.ip} reqId=${req.requestId || 'n/a'}`;
+    const safeMethod = sanitizeLogField(req.method, 16);
+    const safeUrl = sanitizeLogField(req.originalUrl, 300);
+    const safeUserId = sanitizeLogField(userId, 64);
+    const safeIp = sanitizeLogField(req.ip, 64);
+    const safeReqId = sanitizeLogField(req.requestId || 'n/a', 64);
+    const line = `[${new Date().toISOString()}] ${safeMethod} ${safeUrl} ${res.statusCode} ${durationMs}ms user=${safeUserId}${adminTag} ip=${safeIp} reqId=${safeReqId}`;
     console.log(line);
     writeLog(line);
   });

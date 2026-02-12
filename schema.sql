@@ -87,6 +87,26 @@ CREATE TABLE payments (
     INDEX idx_payments_status (status)
 );
 
+-- Coupons
+CREATE TABLE coupons (
+    id VARCHAR(36) PRIMARY KEY,
+    code VARCHAR(40) NOT NULL UNIQUE,
+    description VARCHAR(255),
+    discount_type ENUM('percentage','fixed') NOT NULL,
+    discount_value DECIMAL(10,2) NOT NULL,
+    max_redemptions INT,
+    redemptions_count INT DEFAULT 0,
+    starts_at DATETIME,
+    expires_at DATETIME,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_by_admin_id VARCHAR(36),
+    created_at DATETIME,
+    updated_at DATETIME,
+    INDEX idx_coupons_created_by_admin (created_by_admin_id),
+    INDEX idx_coupons_active (is_active),
+    INDEX idx_coupons_expires_at (expires_at)
+);
+
 -- Webhook event receipts (replay protection)
 CREATE TABLE webhook_event_receipts (
     id VARCHAR(36) PRIMARY KEY,
@@ -249,4 +269,12 @@ VALUES
     (UUID(), 'Jollof Rice', 12.99, 'Classic Nigerian jollof rice with fried plantains', 'Main', true, NOW(), NOW()),
     (UUID(), 'Egusi Soup', 15.99, 'Ground melon soup with assorted meat', 'Soup', true, NOW(), NOW()),
     (UUID(), 'Pounded Yam', 8.99, 'Smooth pounded yam', 'Swallow', true, NOW(), NOW()),
-    (UUID(), 'Chicken Suya', 10.99, 'Spicy grilled chicken skewers', 'Grill', true, NOW(), NOW());
+    (UUID(), 'Chicken Suya', 10.99, 'Spicy grilled chicken skewers', 'Grill', true, NOW(), NOW()),
+    (UUID(), 'Fried Rice Combo', 13.99, 'Nigerian fried rice served with chicken and coleslaw', 'Main', true, NOW(), NOW()),
+    (UUID(), 'Pepper Soup', 11.49, 'Hot and spicy assorted meat pepper soup', 'Soup', true, NOW(), NOW()),
+    (UUID(), 'Moi Moi', 4.99, 'Steamed bean pudding rich in flavor', 'Sides', true, NOW(), NOW()),
+    (UUID(), 'Plantain & Gizzard', 9.49, 'Fried ripe plantain tossed with spicy gizzard', 'Sides', true, NOW(), NOW()),
+    (UUID(), 'Asun Bowl', 12.49, 'Peppered goat meat served with onions and peppers', 'Grill', true, NOW(), NOW()),
+    (UUID(), 'Ofada Rice & Sauce', 14.29, 'Ofada rice paired with signature ayamase sauce', 'Main', true, NOW(), NOW()),
+    (UUID(), 'Puff Puff (6pcs)', 3.99, 'Freshly fried sweet puff puff balls', 'Dessert', true, NOW(), NOW()),
+    (UUID(), 'Zobo Drink', 2.99, 'Chilled hibiscus drink with citrus notes', 'Beverage', true, NOW(), NOW());

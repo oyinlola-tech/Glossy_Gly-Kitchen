@@ -16,10 +16,10 @@ const otpIdentityLimiter = rateLimit({
     ? Number(process.env.OTP_IDENTITY_RATE_LIMIT_MAX)
     : 10,
   keyGenerator: (req) => {
-    const userId = req.body && req.body.userId ? String(req.body.userId).trim().toLowerCase() : '';
-    const email = req.body && req.body.email ? String(req.body.email).trim().toLowerCase() : '';
+    const userId = req.body && req.body.userId ? String(req.body.userId).trim().toLowerCase().slice(0, 128) : '';
+    const email = req.body && req.body.email ? String(req.body.email).trim().toLowerCase().slice(0, 128) : '';
     const identity = userId || email || 'unknown';
-    return `otp:${req.path}:${identity}`;
+    return `otp:${req.path}:${req.ip}:${identity}`;
   },
 });
 
@@ -32,5 +32,6 @@ router.post('/refresh', authLimiter, authController.refresh);
 router.post('/logout', authLimiter, authController.logout);
 router.get('/me', requireAuth, authController.me);
 router.patch('/me', requireAuth, authController.updateMe);
+router.post('/referral-code/generate', requireAuth, authController.generateReferralCode);
 
 module.exports = router;

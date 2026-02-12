@@ -29,6 +29,11 @@ router.get('/orders', requireAdminAuth, auditAdminAction('admin.orders.list'), a
 router.get('/orders/:id', requireAdminAuth, auditAdminAction('admin.orders.get'), adminController.getOrderById);
 router.patch('/orders/:id/status', requireAdminAuth, auditAdminAction('admin.orders.update_status'), adminController.updateOrderStatus);
 
+router.post('/coupons', requireAdminAuth, auditAdminAction('admin.coupons.create'), adminController.createCoupon);
+router.get('/coupons', requireAdminAuth, auditAdminAction('admin.coupons.list'), adminController.listCoupons);
+router.post('/referral-codes', requireAdminAuth, auditAdminAction('admin.referrals.create'), adminController.createUserReferralCode);
+router.get('/referral-codes', requireAdminAuth, auditAdminAction('admin.referrals.list'), adminController.listUserReferralCodes);
+
 router.post('/disputes', requireAdminAuth, auditAdminAction('admin.disputes.create'), adminController.createDispute);
 router.get('/disputes', requireAdminAuth, auditAdminAction('admin.disputes.list'), adminController.listDisputes);
 router.get('/disputes/:id', requireAdminAuth, auditAdminAction('admin.disputes.get'), adminController.getDisputeById);

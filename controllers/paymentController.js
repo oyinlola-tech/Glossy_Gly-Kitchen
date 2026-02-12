@@ -9,6 +9,7 @@ const { buildReceiptEmail } = require('../utils/receiptTemplate');
 
 const buildReference = (orderId, prefix = 'PSK') => `${prefix}-${orderId.slice(0, 8)}-${Date.now()}`;
 const sha256Hex = (value) => crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
+const isValidReference = (value) => typeof value === 'string' && /^[A-Za-z0-9._:-]{6,120}$/.test(value);
 
 const resolveReceiptStatus = (remoteStatus, gatewayResponse) => {
   const status = String(remoteStatus || '').toLowerCase();
@@ -163,38 +164,38 @@ const markPaymentSuccessAndConfirmOrder = async (connection, paymentRow, verifyD
 };
 
 const reserveWebhookEvent = async (connection, { provider, eventId, reference, signatureHash, payloadHash }) => {
-  const [existing] = await connection.query(
+  const eventRowId = uuidv4();
+  await connection.query(
+    `INSERT INTO webhook_event_receipts
+     (id, provider, event_id, reference, signature_hash, payload_hash, first_seen_at, processed_at)
+     VALUES (?, ?, ?, ?, ?, ?, NOW(), NULL)
+     ON DUPLICATE KEY UPDATE
+       id = id`,
+    [eventRowId, provider, eventId || null, reference || null, signatureHash, payloadHash]
+  );
+
+  const [rows] = await connection.query(
     `SELECT id, processed_at
      FROM webhook_event_receipts
      WHERE provider = ? AND signature_hash = ?
      FOR UPDATE`,
     [provider, signatureHash]
   );
-
-  if (existing.length > 0) {
-    if (existing[0].processed_at) {
-      return { accepted: false, eventRowId: existing[0].id };
-    }
-    await connection.query(
-      `UPDATE webhook_event_receipts
-       SET event_id = COALESCE(event_id, ?),
-           reference = COALESCE(reference, ?),
-           payload_hash = ?
-       WHERE id = ?`,
-      [eventId || null, reference || null, payloadHash, existing[0].id]
-    );
-    return { accepted: true, eventRowId: existing[0].id };
+  if (rows.length === 0) {
+    throw new Error('Webhook receipt lookup failed');
   }
-
-  const eventRowId = uuidv4();
+  if (rows[0].processed_at) {
+    return { accepted: false, eventRowId: rows[0].id };
+  }
   await connection.query(
-    `INSERT INTO webhook_event_receipts
-     (id, provider, event_id, reference, signature_hash, payload_hash, first_seen_at, processed_at)
-     VALUES (?, ?, ?, ?, ?, ?, NOW(), NULL)`,
-    [eventRowId, provider, eventId || null, reference || null, signatureHash, payloadHash]
+    `UPDATE webhook_event_receipts
+     SET event_id = COALESCE(event_id, ?),
+         reference = COALESCE(reference, ?),
+         payload_hash = ?
+     WHERE id = ?`,
+    [eventId || null, reference || null, payloadHash, rows[0].id]
   );
-
-  return { accepted: true, eventRowId };
+  return { accepted: true, eventRowId: rows[0].id };
 };
 
 const markWebhookEventProcessed = async (connection, eventRowId) => {
@@ -212,6 +213,19 @@ exports.initialize = async (req, res) => {
 
   if (!isUuid(orderId)) {
     return res.status(400).json({ error: 'Valid orderId is required' });
+  }
+  if (callbackUrl !== undefined && callbackUrl !== null) {
+    if (typeof callbackUrl !== 'string' || callbackUrl.length > 500) {
+      return res.status(400).json({ error: 'Invalid callbackUrl' });
+    }
+    try {
+      const u = new URL(callbackUrl);
+      if (u.protocol !== 'https:') {
+        return res.status(400).json({ error: 'callbackUrl must use https' });
+      }
+    } catch {
+      return res.status(400).json({ error: 'Invalid callbackUrl' });
+    }
   }
 
   try {
@@ -272,7 +286,7 @@ exports.initialize = async (req, res) => {
     });
   } catch (err) {
     console.error('Initialize payment error:', err);
-    return res.status(500).json({ error: err.message || 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -280,8 +294,8 @@ exports.verify = async (req, res) => {
   const { reference } = req.params;
   const userId = req.user.id;
 
-  if (!reference || typeof reference !== 'string') {
-    return res.status(400).json({ error: 'reference is required' });
+  if (!isValidReference(reference)) {
+    return res.status(400).json({ error: 'Invalid reference' });
   }
 
   const connection = await db.getConnection();
@@ -354,7 +368,7 @@ exports.verify = async (req, res) => {
   } catch (err) {
     await connection.rollback();
     console.error('Verify payment error:', err);
-    return res.status(500).json({ error: err.message || 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error' });
   } finally {
     connection.release();
   }
@@ -364,8 +378,8 @@ exports.attachCard = async (req, res) => {
   const { reference } = req.body;
   const userId = req.user.id;
 
-  if (!reference || typeof reference !== 'string') {
-    return res.status(400).json({ error: 'reference is required' });
+  if (!isValidReference(reference)) {
+    return res.status(400).json({ error: 'Invalid reference' });
   }
 
   const connection = await db.getConnection();
@@ -411,7 +425,7 @@ exports.attachCard = async (req, res) => {
   } catch (err) {
     await connection.rollback();
     console.error('Attach card error:', err);
-    return res.status(500).json({ error: err.message || 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error' });
   } finally {
     connection.release();
   }
@@ -607,7 +621,7 @@ exports.payWithSavedCard = async (req, res) => {
   } catch (err) {
     await connection.rollback();
     console.error('Pay with saved card error:', err);
-    return res.status(500).json({ error: err.message || 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error' });
   } finally {
     connection.release();
   }
@@ -651,6 +665,11 @@ exports.paystackWebhook = async (req, res) => {
     }
 
     if (!reference) {
+      await markWebhookEventProcessed(connection, webhookEventRowId);
+      await connection.commit();
+      return res.status(200).json({ message: 'Webhook received' });
+    }
+    if (!isValidReference(reference)) {
       await markWebhookEventProcessed(connection, webhookEventRowId);
       await connection.commit();
       return res.status(200).json({ message: 'Webhook received' });

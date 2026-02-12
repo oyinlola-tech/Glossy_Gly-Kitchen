@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 const buildCorsOrigins = () => {
   if (!process.env.CORS_ORIGIN) return [];
   return process.env.CORS_ORIGIN
@@ -84,6 +86,13 @@ const rateLimit = ({ windowMs, max, keyGenerator } = {}) => {
   const windowMsSafe = Number(windowMs) > 0 ? Number(windowMs) : 60 * 1000;
   const maxSafe = Number(max) > 0 ? Number(max) : 60;
   const pruneInterval = 60 * 1000;
+  const maxKeys = 10_000;
+
+  const normalizeKey = (input) => {
+    const raw = String(input || 'unknown');
+    if (raw.length <= 128) return raw;
+    return crypto.createHash('sha256').update(raw, 'utf8').digest('hex');
+  };
 
   return (req, res, next) => {
     const now = Date.now();
@@ -97,10 +106,18 @@ const rateLimit = ({ windowMs, max, keyGenerator } = {}) => {
       lastPrune = now;
     }
 
-    const key = keyGenerator ? keyGenerator(req) : req.ip;
+    const key = normalizeKey(keyGenerator ? keyGenerator(req) : req.ip);
     const entry = hits.get(key);
 
     if (!entry || entry.resetAt <= now) {
+      if (hits.size >= maxKeys) {
+        for (const [k, v] of hits.entries()) {
+          if (v.resetAt <= now) {
+            hits.delete(k);
+          }
+          if (hits.size < maxKeys) break;
+        }
+      }
       hits.set(key, { count: 1, resetAt: now + windowMsSafe });
       return next();
     }
